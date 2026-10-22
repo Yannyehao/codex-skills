@@ -1,0 +1,9 @@
+{
+  "project_root": "PATH_TO_ZAI_REPOSITORY",
+  "candidate_database_url": "NOTION_DATABASE_URL",
+  "candidate_data_source_url": "collection://DATA_SOURCE_ID",
+  "viewpoint_symbols": {
+    "XDV": "XDV.TO",
+    "BNC": "NA.TO"
+  }
+}
