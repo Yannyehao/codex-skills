@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lexicon 入库"
+  short_description: "Ingest approved English and French with verified counts"
+  default_prompt: "Use $lexicon-ingest to ingest the approved original English and French text into my shared Lexicon and verify token counts."

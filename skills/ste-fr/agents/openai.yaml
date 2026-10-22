@@ -1,0 +1,4 @@
+interface:
+  display_name: "STE-inspired 三语对话"
+  short_description: "Natural conversation in French, English, and Chinese"
+  default_prompt: "Use $ste-fr to start a natural trilingual conversation, with each French paragraph followed by English and Chinese."
