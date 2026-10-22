@@ -21,4 +21,4 @@
 - 安装成功不代表所有产品均支持本地 Skill；此安装目标为本机 Codex。
 
 ## 状态
-已导入 ste-fr 和 lexicon-ingest；两个 Skill 通过官方校验。安装器已验证文件一致与重复安装保留本机配置。公开远端已创建，准备推送并回读远端提交。
+已完成：导入 ste-fr 和 lexicon-ingest，两个 Skill 通过官方校验；安装器已验证文件一致与重复安装保留本机配置；main 已推送，GitHub 返回 PUBLIC，远端提交与本机一致。后续 Skills 统一在此维护。

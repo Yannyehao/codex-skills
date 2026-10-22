@@ -1,5 +1,10 @@
 # DEVLOG
 
+## 2026-10-22 · 发布确认
+- main 推送成功，GitHub 确认仓库 PUBLIC，远端 main 与本机提交一致。
+- 本机全局规则已保存源仓库位置、安装流程和公开内容边界。
+- 后续直接在 skills/ 维护，安装、校验、commit、push。
+
 ## 2026-10-22 · 导入、安装及公开仓库创建
 - 导入 ste-fr 和 lexicon-ingest，加入安装脚本和 config.example.json。
 - 词库目标从指令迁入忽略的 config.local.json；ste-fr 使用 Skills 清单或相邻目录解析委托。
