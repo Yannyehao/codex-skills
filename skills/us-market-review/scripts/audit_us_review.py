@@ -213,7 +213,8 @@ def audit(config_path: Path) -> tuple[dict[str, Any], list[str]]:
         image = row.get("image")
         if not symbol or not isinstance(image, dict):
             continue
-        if symbol not in review_results:
+        image_source = str(image.get("source", "")).lower()
+        if image_source == "b1" and symbol not in review_results:
             errors.append(f"{symbol}: nightly row has B1 image but no B1 review result")
             continue
         image_path = resolve_image(image.get("image_path"), chart_dir, symbol)
