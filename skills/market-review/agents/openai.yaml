@@ -1,0 +1,4 @@
+interface:
+  display_name: "市场复盘"
+  short_description: "美股/A股全量复盘：候选、持续观察、状态变化与月度台账"
+  default_prompt: "Use $market-review to complete the full review for the latest closed session."

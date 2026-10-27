@@ -1,0 +1,23 @@
+{
+  "lifecycle_service": {
+    "python": "PATH_TO_PYTHON_EXECUTABLE",
+    "project_root": "PATH_TO_ZAI_REPOSITORY",
+    "database": "PATH_TO_LEDGER_DB",
+    "review_actor": "review:NAME"
+  },
+  "profiles": {
+    "us": {
+      "project_root": "PATH_TO_ZAI_REPOSITORY",
+      "candidate_database_url": "NOTION_DATABASE_URL",
+      "candidate_data_source_url": "collection://DATA_SOURCE_ID",
+      "viewpoint_symbols": {
+        "XDV": "XDV.TO",
+        "BNC": "NA.TO"
+      }
+    },
+    "a": {
+      "candidate_database_url": "NOTION_DATABASE_URL",
+      "candidate_data_source_url": "collection://DATA_SOURCE_ID"
+    }
+  }
+}
