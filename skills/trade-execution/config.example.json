@@ -1,0 +1,19 @@
+{
+  "lifecycle_service": {
+    "python": "PATH_TO_PYTHON_EXECUTABLE",
+    "project_root": "PATH_TO_ZAI_REPOSITORY",
+    "database": "PATH_TO_LEDGER_DB",
+    "human_actor": "human:NAME",
+    "import_actor": "import:NAME",
+    "scale_up_policy_file": "PATH_TO_LOCAL_SCALE_UP_POLICY_JSON"
+  },
+  "profiles": {
+    "us": {
+      "tick": null
+    },
+    "a": {
+      "tick": null,
+      "price_limit_pct": null
+    }
+  }
+}

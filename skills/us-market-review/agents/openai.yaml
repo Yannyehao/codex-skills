@@ -1,4 +1,7 @@
 interface:
-  display_name: "美股全量复盘"
-  short_description: "全库核对今日候选、持续观察、状态变化与交易条件"
-  default_prompt: "Use $us-market-review to complete today's full U.S. stock review from the latest local artifacts and the live candidate database."
+  display_name: "美股全量复盘（兼容别名）"
+  short_description: "旧命令别名，转交 market-review 的美股画像"
+  default_prompt: "Use $us-market-review to run the U.S. profile of $market-review."
+
+policy:
+  allow_implicit_invocation: false

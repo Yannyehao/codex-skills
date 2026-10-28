@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Destination,
-    [string[]]$SkillName = @('ste-fr', 'lexicon-ingest', 'us-market-review')
+    [string[]]$SkillName = @('ste-fr', 'lexicon-ingest', 'market-review', 'trade-execution', 'us-market-review')
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,7 +32,7 @@ foreach ($skill in $SkillName) {
         throw 'The installation destination must differ from the source directory.'
     }
     foreach ($file in (Get-ChildItem -LiteralPath $sourceRoot -Recurse -File)) {
-        if ($file.Name -like '*.local.json') { continue }
+        if ($file.Name -like '*.local.json' -or $file.Extension -eq '.pyc' -or $file.FullName -like '*\__pycache__\*') { continue }
         $relativePath = $file.FullName.Substring($sourceRoot.Length + 1)
         $targetFile = Join-Path $targetRoot $relativePath
         New-Item -ItemType Directory -Path (Split-Path -Parent $targetFile) -Force | Out-Null
