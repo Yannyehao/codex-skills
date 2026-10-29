@@ -48,6 +48,26 @@ A_PROFILE = {
     "tdx": {"label": "A", "data_source": "synthetic", "role": "chart evidence only"}}
 
 
+def stop_semantics(**overrides: object) -> dict:
+    """Valid persisted `review.stop_semantics`; INTRADAY_HARD at the ticket's 95.00 stop_trigger."""
+    base = {"basis": {"kind": "PRIOR_B1_N_LOW", "level": "95.00",
+                      "evidence": "below the prior N low named in the thesis"},
+            "activation": "INTRADAY_HARD", "reclaim_by": None,
+            "broker_implementation": "sell stop-limit 95.00/94.50 after the entry fill"}
+    base.update(overrides)
+    return base
+
+
+def with_stop(t: dict, sem: object) -> dict:
+    """Copy of ticket `t` whose review carries `sem` (None drops the key)."""
+    t = copy.deepcopy(t)
+    if sem is None:
+        t["review"].pop("stop_semantics", None)
+    else:
+        t["review"]["stop_semantics"] = sem
+    return t
+
+
 def profile_fields(profile: dict) -> dict:
     """`profile` + `profile_sha256` as the service prints them (hash of the sorted-key JSON)."""
     text = json.dumps(profile, ensure_ascii=False, sort_keys=True)
@@ -92,7 +112,8 @@ def ticket(**overrides: object) -> dict:
         "approval": approval(),
         "created_by": "review:codex", "created_at": "2026-10-27T12:00:00+00:00",
         "review": {"source": {}, "veto_review": None, "mode_hint": "PASSIVE_LIMIT",
-                   "capital_contract": {"stage_changes_setup_validity": False}},
+                   "capital_contract": {"stage_changes_setup_validity": False},
+                   "stop_semantics": stop_semantics()},
         "order_template": {"order_type": "LIMIT", "tif": "DAY"}, "fee_assumption": {},
         "state": "APPROVED", "journal_state": "APPROVED", "state_at": "2026-10-27T13:00:00+00:00",
         "approved_by": "human:alice", "approved_at": "2026-10-27T13:00:00+00:00",
@@ -128,7 +149,10 @@ def a_share(**overrides: object) -> dict:
         risk_amount="50.00", max_loss_amount="60.00", reward_amount="100.00", r_multiple="2.00",
         risk_budget="60.00", **profile_fields(A_PROFILE))
     fields.update(overrides)
-    return ticket(**fields)
+    t = ticket(**fields)
+    t["review"]["stop_semantics"] = stop_semantics(
+        basis={"kind": "WHITE_LINE", "level": fields["stop_trigger"], "evidence": "white line per thesis"})
+    return t
 
 
 def check(t: object = None, *, svc: object = AUDIT_OK,
@@ -453,6 +477,114 @@ def open_position(**overrides: object) -> dict:
     return base
 
 
+class StopSemantics(Blocks):
+    CONFIRM = dict(activation="CLOSE_CONFIRM",
+                   basis={"kind": "ENTRY_CANDLE_LOW", "level": "96.00",
+                          "evidence": "buy candle low from the thesis"},
+                   broker_implementation="close alert at 96.00; after the close, sell manually")
+    RECLAIM = dict(activation="NEXT_SESSION_FAILURE_TO_RECLAIM", reclaim_by="next session 10:00",
+                   basis={"kind": "WHITE_LINE", "level": "96.00", "evidence": "white line"},
+                   broker_implementation="check at 10:00; if not reclaimed, sell manually")
+
+    def test_missing_stop_semantics_blocks_every_execution_audit(self) -> None:
+        self.assert_blocked(check(with_stop(ticket(), None)), "review.stop_semantics is missing")
+        self.assert_blocked(audit.protective(with_stop(open_position(), None), AUDIT_OK, "95.00",
+                                             "94.50", "100"), "review.stop_semantics is missing")
+        self.assert_blocked(check(with_stop(ticket(), "INTRADAY_HARD")), "must be a JSON object")
+
+    def test_malformed_or_unsupported_semantics_block(self) -> None:
+        good = stop_semantics()
+        cases = {
+            "unsupported keys": {**good, "extra": 1},
+            "exactly": {**good, "basis": {"kind": "WHITE_LINE", "level": "95.00"}},
+            "basis.kind": {**good, "basis": {**good["basis"], "kind": "MOVING_AVERAGE"}},
+            "basis.level must": {**good, "basis": {**good["basis"], "level": 95.0}},
+            "positive decimal TEXT": {**good, "basis": {**good["basis"], "level": "abc"}},
+            "basis.evidence": {**good, "basis": {**good["basis"], "evidence": "  "}},
+            "stop_semantics.activation": {**good, "activation": "intraday_hard"},
+            "broker_implementation": {**good, "broker_implementation": ""},
+            "reclaim_by": {**good, "reclaim_by": 5},
+        }
+        for fragment, sem in cases.items():
+            self.assert_blocked(check(with_stop(ticket(), sem)), fragment)
+        self.assert_blocked(check(with_stop(ticket(), {k: v for k, v in good.items()
+                                                       if k != "activation"})),
+                            "stop_semantics.activation")
+
+    def test_broker_implementation_is_optional_only_for_intraday_hard(self) -> None:
+        hard = stop_semantics()
+        del hard["broker_implementation"]
+        self.assertEqual(check(with_stop(ticket(), hard))["blockers"], [])
+        self.assert_blocked(check(with_stop(ticket(), {**hard, "broker_implementation": " "})),
+                            "broker_implementation must be non-empty text when present")
+        for base in (self.CONFIRM, self.RECLAIM):
+            for value in ("missing", "", "  ", 5):
+                sem = stop_semantics(**base)
+                if value == "missing":
+                    del sem["broker_implementation"]
+                else:
+                    sem["broker_implementation"] = value
+                self.assert_blocked(check(with_stop(ticket(), sem)),
+                                    f"{base['activation']} needs a non-empty "
+                                    "stop_semantics.broker_implementation")
+
+    def test_intraday_hard_stop_trigger_must_equal_basis_level(self) -> None:
+        sem = stop_semantics(basis={"kind": "WHITE_LINE", "level": "95.50", "evidence": "x"})
+        self.assert_blocked(check(with_stop(ticket(), sem)), "to equal stop_semantics.basis.level")
+
+    def test_intraday_hard_pre_submit_shows_the_live_protective_stop_limit(self) -> None:
+        result = check()
+        self.assertEqual(result["verdict"], "READY_FOR_HUMAN_CONFIRMATION")
+        self.assertEqual(result["stop_semantics"]["activation"], "INTRADAY_HARD")
+        self.assertEqual(result["protective_plan"]["description"],
+                         "SELL stop-limit: trigger 95.00 >= limit 94.50")
+        self.assertNotIn("human_only_stop_plan", result)
+
+    def test_non_hard_pre_submit_renders_no_live_stop_only_a_human_procedure(self) -> None:
+        for extra in (self.CONFIRM, self.RECLAIM):
+            result = check(with_stop(ticket(), stop_semantics(**extra)))
+            self.assertEqual(result["blockers"], [])
+            self.assertEqual(result["verdict"], "READY_FOR_HUMAN_CONFIRMATION")
+            self.assertNotIn("protective_plan", result)
+            plan = result["human_only_stop_plan"]
+            self.assertIs(plan["live_broker_stop"], False)
+            self.assertEqual(plan["human_only_procedure"], extra["broker_implementation"])
+            self.assertEqual(plan["activation"], extra["activation"])
+            text = json.dumps(result, ensure_ascii=False)
+            self.assertNotIn("SELL stop-limit", text)
+            self.assertNotIn("gap-through", text)
+            self.assertTrue(any(extra["activation"] in w for w in result["warnings"]))
+
+    def test_reclaim_deadline_is_required_for_next_session_failure(self) -> None:
+        for reclaim in (None, "", "  "):
+            sem = stop_semantics(**{**self.RECLAIM, "reclaim_by": reclaim})
+            self.assert_blocked(check(with_stop(ticket(), sem)), "needs a non-empty")
+        no_key = stop_semantics(**self.RECLAIM)
+        del no_key["reclaim_by"]
+        self.assert_blocked(check(with_stop(ticket(), no_key)), "reclaim_by")
+        optional = stop_semantics(**self.CONFIRM)
+        del optional["reclaim_by"]
+        self.assertEqual(check(with_stop(ticket(), optional))["blockers"], [])
+
+    def test_protective_blocks_when_activation_is_not_intraday_hard(self) -> None:
+        for extra in (self.CONFIRM, self.RECLAIM):
+            t = with_stop(open_position(), stop_semantics(**extra))
+            result = audit.protective(t, AUDIT_OK, "95.00", "94.50", "100")
+            self.assert_blocked(result, "not INTRADAY_HARD")
+            self.assertNotIn("protective_order", result)
+            self.assertIs(result["human_only_stop_plan"]["live_broker_stop"], False)
+
+    def test_protective_passes_for_intraday_hard(self) -> None:
+        result = audit.protective(open_position(), AUDIT_OK, "95.00", "94.50", "100")
+        self.assertEqual(result["verdict"], "READY_FOR_HUMAN_CONFIRMATION")
+
+    def test_check_args_alone_cannot_gate_attach_stop(self) -> None:
+        # check-args has no ticket state; the state-aware stop gate is `protective`.
+        args = {"ticket_id": "T-1", "session_date": "20261027", "submitted_by": "human:alice",
+                "occurred_at": "2026-10-27T09:33:00-04:00", "idempotency_key": "k" * 32}
+        self.assertEqual(audit.check_args("attach_stop", args)["verdict"], "ARGS_OK")
+
+
 class Protective(Blocks):
     def run_protective(self, t: dict | None = None, *, trigger: str = "95.00",
                        limit: str = "94.50", shares: str = "100",
@@ -586,6 +718,219 @@ class CheckArgs(Blocks):
         del args["limit_price"]
         self.assert_blocked(audit.check_args("submit_order", args), "limit_price")
         self.assert_blocked(audit.check_args("submit_order", submit_args(tif="GTD")), "GTD")
+
+
+def terminal(state: str = "CLOSED", **overrides: object) -> dict:
+    """A terminal ticket in the historical shape: no stop_semantics."""
+    fields: dict = dict(state=state, journal_state=state)
+    if state == "CLOSED":
+        fields["position"] = {"open_qty": 0, "entry_qty": 100, "exit_qty": 100, "closed": True,
+                              "avg_entry_price": "100.0000", "fees_total": "0.00", "fills": []}
+    fields.update(overrides)
+    return with_stop(ticket(**fields), None)
+
+
+def review_args(**overrides: object) -> dict:
+    base = {"ticket_id": "T-1", "reviewed_by": "human:alice", "outcome": audit.OUTCOME_DONE,
+            "note": "followed the plan", "occurred_at": "2026-10-28T09:00:00-04:00",
+            "idempotency_key": "r" * 32}
+    base.update(overrides)
+    return base
+
+
+class PostTradeReview(Blocks):
+    def run_review(self, t: object = None, args: object = None, svc: object = AUDIT_OK) -> dict:
+        return audit.post_trade_review(terminal() if t is None else t, svc,
+                                       review_args() if args is None else args)
+
+    def test_historical_closed_ticket_without_stop_semantics_is_reviewable(self) -> None:
+        result = self.run_review()
+        self.assertEqual((result["verdict"], result["blockers"]), ("ARGS_OK", []))
+        self.assert_blocked(check(terminal()), "needs ['APPROVED']")
+
+    def test_outcome_vocabulary_is_the_services(self) -> None:
+        self.assertEqual((audit.OUTCOME_MISSED, audit.OUTCOME_DONE, audit.OUTCOME_WRONG),
+                         ("机会识别成功、执行未覆盖", "机会识别成功、执行完成", "机会识别失败"))
+
+    def test_state_must_be_exactly_terminal_and_not_reviewed(self) -> None:
+        for state in ("DRAFT", "APPROVED", "ORDER_SUBMITTED", "PARTIALLY_FILLED", "POSITION_OPEN"):
+            self.assert_blocked(self.run_review(terminal(state=state, journal_state=state)),
+                                "needs exactly one of")
+        self.assert_blocked(self.run_review(terminal(state="REVIEWED", journal_state="REVIEWED")),
+                            "already REVIEWED")
+        self.assert_blocked(self.run_review(terminal(state="closed", journal_state="closed")), "state")
+        self.assert_blocked(self.run_review(terminal(journal_state="POSITION_OPEN")), "state journal")
+
+    def test_service_audit_must_be_clean(self) -> None:
+        self.assert_blocked(self.run_review(svc=None), "service audit")
+        self.assert_blocked(self.run_review(svc={**AUDIT_OK, "ok": False}), "service audit")
+
+    def test_ticket_id_must_match_the_state(self) -> None:
+        self.assert_blocked(self.run_review(args=review_args(ticket_id="T-2")), "not the state's")
+
+    def test_actor_must_be_a_named_human(self) -> None:
+        for actor in ("review:codex", "import:x", "human:", "human", None):
+            self.assert_blocked(self.run_review(args=review_args(reviewed_by=actor)), "human:<name>")
+
+    def test_outcome_must_be_service_supported_and_compatible_with_state(self) -> None:
+        done, missed, wrong = audit.OUTCOME_DONE, audit.OUTCOME_MISSED, audit.OUTCOME_WRONG
+        for outcome in (done, wrong):
+            self.assertEqual(self.run_review(args=review_args(outcome=outcome))["verdict"], "ARGS_OK")
+        self.assert_blocked(self.run_review(args=review_args(outcome=missed)),
+                            "not allowed for state CLOSED")
+        self.assert_blocked(self.run_review(args=review_args(outcome="success")), "not allowed")
+        for state in ("CANCELLED", "EXPIRED", "REJECTED"):
+            t = terminal(state=state)
+            for outcome in (missed, wrong):
+                self.assertEqual(self.run_review(t, review_args(outcome=outcome))["verdict"], "ARGS_OK")
+            self.assert_blocked(self.run_review(t, review_args(outcome=done)), f"state {state}")
+        with_position = terminal(state="CANCELLED", position={"open_qty": 50})
+        self.assert_blocked(self.run_review(with_position, review_args(outcome=wrong)), "has a position")
+
+    def test_note_is_required_and_never_inferred(self) -> None:
+        for note in ("", "   ", None, 5):
+            self.assert_blocked(self.run_review(args=review_args(note=note)), "note")
+        for key in ("note", "outcome"):
+            args = review_args()
+            del args[key]
+            self.assert_blocked(self.run_review(args=args), f"missing required key '{key}'")
+
+    def test_time_key_and_annotation_rules(self) -> None:
+        self.assert_blocked(self.run_review(args=review_args(occurred_at="2026-10-28T09:00:00")),
+                            "UTC offset")
+        self.assert_blocked(self.run_review(args=review_args(idempotency_key=" ")), "idempotency_key")
+        self.assert_blocked(self.run_review(args=review_args(annotation_id="")), "annotation_id")
+        self.assertEqual(self.run_review(args=review_args(annotation_id="A-1"))["verdict"], "ARGS_OK")
+        self.assert_blocked(self.run_review(args=review_args(now="2026-10-28")), "unexpected key")
+        self.assert_blocked(self.run_review(args=[1]), "args JSON must be an object")
+
+    def test_mark_reviewed_stays_out_of_generic_check_args(self) -> None:
+        self.assertNotIn("mark_reviewed", audit.OP_SPECS)
+        self.assert_blocked(audit.check_args("mark_reviewed", review_args()), "post-trade-review")
+
+    def test_cli_prints_args_ok_and_never_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            files = {n: Path(folder, n + ".json") for n in ("state", "audit", "args")}
+            files["state"].write_text(json.dumps(terminal()), encoding="utf-8")
+            files["audit"].write_text(json.dumps(AUDIT_OK), encoding="utf-8")
+            files["args"].write_text(json.dumps(review_args()), encoding="utf-8")
+            before = sorted(p.name for p in Path(folder).iterdir())
+            saved, out = sys.argv, io.StringIO()
+            sys.argv = ["audit_ticket.py", "post-trade-review", "--state", str(files["state"]),
+                        "--service-audit", str(files["audit"]), "--args-json", str(files["args"])]
+            try:
+                with contextlib.redirect_stdout(out):
+                    code = audit.main()
+            finally:
+                sys.argv = saved
+            self.assertEqual(sorted(p.name for p in Path(folder).iterdir()), before)
+        payload = json.loads(out.getvalue())
+        self.assertEqual((code, payload["verdict"]), (0, "ARGS_OK"))
+
+
+def historical_state(**overrides: object) -> dict:
+    base = {"ticket_id": "H-1", "historical_id": "H-1", "historical_import": True,
+            "pre_system_trade": True, "state": "CLOSED", "journal_state": "CLOSED",
+            "execution_state": "CLOSED"}
+    base.update(overrides)
+    return base
+
+
+def historical_args(**overrides: object) -> dict:
+    base = {"historical_id": "H-1", "reviewed_by": "human:alice", "outcome": audit.OUTCOME_DONE,
+            "note": "followed the plan", "occurred_at": "2026-10-28T09:00:00-04:00",
+            "idempotency_key": "h" * 32}
+    base.update(overrides)
+    return base
+
+
+HIST_AUDIT_OK = {"available": True, "ok": True, "issues": []}
+
+
+class HistoricalPostTradeReview(Blocks):
+    def run_review(self, state: object = None, args: object = None, svc: object = HIST_AUDIT_OK) -> dict:
+        return audit.historical_post_trade_review(
+            historical_state() if state is None else state, svc,
+            historical_args() if args is None else args)
+
+    def test_closed_historical_import_is_reviewable(self) -> None:
+        result = self.run_review()
+        self.assertEqual((result["verdict"], result["blockers"], result["op"]),
+                         ("ARGS_OK", [], "mark_historical_reviewed"))
+        self.assertEqual(result["historical_id"], "H-1")
+        for outcome in (audit.OUTCOME_DONE, audit.OUTCOME_WRONG):
+            self.assertEqual(self.run_review(args=historical_args(outcome=outcome))["verdict"], "ARGS_OK")
+
+    def test_markers_and_state_are_required(self) -> None:
+        for key in ("historical_import", "pre_system_trade"):
+            self.assert_blocked(self.run_review(historical_state(**{key: False})), f"state.{key}")
+            state = historical_state()
+            del state[key]
+            self.assert_blocked(self.run_review(state), f"state.{key}")
+        self.assert_blocked(self.run_review(historical_state(state="REVIEWED", journal_state="REVIEWED")),
+                            "already REVIEWED")
+        for current in ("POSITION_OPEN", "CANCELLED", "EXPIRED", "REJECTED", "closed", None):
+            self.assert_blocked(self.run_review(historical_state(state=current, journal_state=current)),
+                                "exactly 'CLOSED'")
+        self.assert_blocked(self.run_review(historical_state(journal_state="POSITION_OPEN")),
+                            "state journal")
+        self.assert_blocked(self.run_review([1]), "not a JSON object")
+
+    def test_service_audit_must_be_clean(self) -> None:
+        self.assert_blocked(self.run_review(svc=None), "service audit")
+        self.assert_blocked(self.run_review(svc={**HIST_AUDIT_OK, "ok": False}), "service audit")
+        self.assert_blocked(self.run_review(svc={**HIST_AUDIT_OK, "issues": ["x"]}), "service audit")
+
+    def test_args_rules(self) -> None:
+        self.assert_blocked(self.run_review(args=historical_args(historical_id="H-2")), "not the state's")
+        for actor in ("review:codex", "import:x", "human:", "human", None):
+            self.assert_blocked(self.run_review(args=historical_args(reviewed_by=actor)), "human:<name>")
+        for outcome in (audit.OUTCOME_MISSED, "success", None):
+            self.assert_blocked(self.run_review(args=historical_args(outcome=outcome)), "not allowed")
+        for key in ("note", "idempotency_key"):
+            for value in ("", "  ", None, 5):
+                self.assert_blocked(self.run_review(args=historical_args(**{key: value})), key)
+        for key in ("historical_id", "reviewed_by", "outcome", "note", "occurred_at", "idempotency_key"):
+            args = historical_args()
+            del args[key]
+            self.assert_blocked(self.run_review(args=args), f"missing required key '{key}'")
+        self.assert_blocked(self.run_review(args=historical_args(occurred_at="2026-10-28T09:00:00")),
+                            "UTC offset")
+        self.assert_blocked(self.run_review(args=historical_args(annotation_id="")), "annotation_id")
+        self.assert_blocked(self.run_review(args=historical_args(annotation_id=None)), "annotation_id")
+        self.assertEqual(self.run_review(args=historical_args(annotation_id="A-1"))["verdict"], "ARGS_OK")
+        self.assert_blocked(self.run_review(args=historical_args(ticket_id="H-1")), "unexpected key")
+        self.assert_blocked(self.run_review(args=historical_args(now="2026-10-28")), "unexpected key")
+        self.assert_blocked(self.run_review(args=[1]), "args JSON must be an object")
+
+    def test_generic_review_and_check_args_block_historical_imports(self) -> None:
+        self.assert_blocked(audit.post_trade_review(historical_state(), AUDIT_OK, review_args(ticket_id="H-1")),
+                            "historical import")
+        self.assert_blocked(audit.post_trade_review(dict(terminal(), historical_import=True), AUDIT_OK,
+                                                    review_args()), "historical import")
+        self.assertIn("mark_historical_reviewed", audit.FORBIDDEN_OPS)
+        self.assertNotIn("mark_historical_reviewed", audit.OP_SPECS)
+        self.assert_blocked(audit.check_args("mark_historical_reviewed", historical_args()),
+                            "historical-post-trade-review")
+
+    def test_cli_prints_args_ok_and_never_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            files = {n: Path(folder, n + ".json") for n in ("state", "audit", "args")}
+            files["state"].write_text(json.dumps(historical_state()), encoding="utf-8")
+            files["audit"].write_text(json.dumps(HIST_AUDIT_OK), encoding="utf-8")
+            files["args"].write_text(json.dumps(historical_args()), encoding="utf-8")
+            before = sorted(p.name for p in Path(folder).iterdir())
+            saved, out = sys.argv, io.StringIO()
+            sys.argv = ["audit_ticket.py", "historical-post-trade-review", "--state", str(files["state"]),
+                        "--service-audit", str(files["audit"]), "--args-json", str(files["args"])]
+            try:
+                with contextlib.redirect_stdout(out):
+                    code = audit.main()
+            finally:
+                sys.argv = saved
+            self.assertEqual(sorted(p.name for p in Path(folder).iterdir()), before)
+        payload = json.loads(out.getvalue())
+        self.assertEqual((code, payload["verdict"]), (0, "ARGS_OK"))
 
 
 class IdempotencyKey(unittest.TestCase):

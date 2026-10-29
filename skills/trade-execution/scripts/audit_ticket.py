@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Read-only dry-run audit for an approved trade ticket.
 
-Input is the JSON printed by `python -m zradar.trade_lifecycle state` (schema v6) plus the JSON
+Every execution audit also requires a valid persisted review.stop_semantics (basis + activation) and
+fails closed without it. Input is the JSON printed by `python -m zradar.trade_lifecycle state` (schema v6) plus the JSON
 printed by `python -m zradar.trade_lifecycle audit --ticket-id <id>`; nothing is renamed or mapped
 (see references/ticket-contract.md and references/service-cli.md). The approval terms hash and the
 frozen market profile are read from that state (`approval`, `profile`); no hash is ever typed in. This script never opens the
@@ -12,8 +13,15 @@ persisted on the ticket or supplied by the caller's policy.
 
 Subcommands
   pre-submit         approval gate + show the exact entry order form from a fresh broker quote
-  protective         approval gate + validate protective stop-limit fields after an entry fill
-  check-args         validate an `apply --args-json` file for one allowed service operation
+  protective         approval gate + validate protective stop-limit fields after an entry fill;
+                     blocks unless the persisted stop activation is INTRADAY_HARD. attach_stop
+                     requires its successful result (check-args alone cannot see ticket state)
+  post-trade-review  state-aware gate for one mark_reviewed args file (terminal, not REVIEWED);
+                     prints ARGS_OK only and never writes; blocks historical imports
+  historical-post-trade-review
+                     state-aware gate for one mark_historical_reviewed args file (CLOSED historical
+                     import, not REVIEWED); prints ARGS_OK only and never writes
+  check-args        validate an `apply --args-json` file for one allowed service operation
   idempotency-key    derive a stable key for one lifecycle write from its evidence
   scale-up-proposal  verify a `scale-up` result before it may be shown as a proposal
 """
@@ -50,6 +58,21 @@ PROFILE_KEYS = ("market", "currency", "lot_size", "min_sessions_before_exit",
                 "odd_lot_exit_closes_only", "price_limit", "fee_components", "calendar", "tdx")
 APPROVAL_KEYS = ("event_seq", "approved_by", "approved_at", "terms_sha256", "matches_ticket_terms",
                  "note")
+# Persisted `review.stop_semantics` contract (references/stop-semantics.md). Exact match.
+STOP_BASIS_KINDS = ("ENTRY_CANDLE_LOW", "PRIOR_B1_N_LOW", "WHITE_LINE", "YELLOW_LINE",
+                    "KEY_K_OR_PLATFORM")
+STOP_ACTIVATIONS = ("INTRADAY_HARD", "CLOSE_CONFIRM", "NEXT_SESSION_FAILURE_TO_RECLAIM")
+STOP_KEYS = ("basis", "activation", "reclaim_by", "broker_implementation")
+STOP_BASIS_KEYS = ("kind", "level", "evidence")
+HARD = "INTRADAY_HARD"
+# Service REVIEW_OUTCOMES, by the terminal state they are compatible with (service `outcome_candidates`).
+OUTCOME_MISSED, OUTCOME_DONE, OUTCOME_WRONG = ("机会识别成功、执行未覆盖", "机会识别成功、执行完成",
+                                              "机会识别失败")
+TERMINAL_STATES = ("CLOSED", "CANCELLED", "EXPIRED", "REJECTED")
+REVIEW_OUTCOMES_BY_STATE = {"CLOSED": (OUTCOME_DONE, OUTCOME_WRONG),
+                            "CANCELLED": (OUTCOME_MISSED, OUTCOME_WRONG),
+                            "EXPIRED": (OUTCOME_MISSED, OUTCOME_WRONG),
+                            "REJECTED": (OUTCOME_MISSED, OUTCOME_WRONG)}
 STAGE_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,31}$")
 HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 YMD_RE = re.compile(r"^\d{8}$")
@@ -125,7 +148,10 @@ FORBIDDEN_OPS = {
     "approve": "approval is the human's own act (human:<name> + human_confirmed + the reviewed "
                "terms_sha256); this skill never prepares or runs it",
     "create_draft": "drafting belongs to $market-review and only on an explicit 固化 instruction",
-    "mark_reviewed": "a review conclusion is a human judgment and is not part of execution",
+    "mark_reviewed": "a review conclusion is a human judgment and is not part of execution; "
+                     "prepare it only through the state-aware `post-trade-review` subcommand",
+    "mark_historical_reviewed": "a historical import is reviewed only through the state-aware "
+                                "`historical-post-trade-review` subcommand",
 }
 PRICE_ARGS = ("limit_price", "stop_trigger", "max_price", "stop_limit", "price")
 DATE_ARGS = ("session_date", "expiry_date", "as_of_date")
@@ -418,6 +444,76 @@ def check_veto_review(report: Report, t: dict[str, Any]) -> None:
         report.block(f"persisted veto_review vetoes {', '.join(vetoed)}: not executable")
 
 
+def parse_stop_semantics(report: Report, t: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate the persisted `review.stop_semantics`; fail closed, never fill anything in.
+
+    Returns {activation, kind, level (Decimal), evidence, reclaim_by, broker_implementation} or None.
+    """
+    raw = t["review"].get("stop_semantics") if isinstance(t["review"], dict) else None
+    if raw is None:
+        report.block("review.stop_semantics is missing: the ticket persists a stop price but no stop "
+                     "basis/activation, so it is not executable; require a new draft and a new human "
+                     "approval, never fill it from chat")
+        return None
+    if not isinstance(raw, dict):
+        report.block("review.stop_semantics must be a JSON object")
+        return None
+    before = len(report.blockers)
+    extra = sorted(set(raw) - set(STOP_KEYS))
+    if extra:
+        report.block(f"review.stop_semantics has unsupported keys {extra}; allowed {list(STOP_KEYS)}")
+    basis = raw.get("basis")
+    level = kind = evidence = None
+    if not isinstance(basis, dict) or set(basis) != set(STOP_BASIS_KEYS):
+        report.block(f"stop_semantics.basis must be an object with exactly {list(STOP_BASIS_KEYS)}")
+    else:
+        kind, evidence = basis["kind"], basis["evidence"]
+        if kind not in STOP_BASIS_KINDS:
+            report.block(f"stop_semantics.basis.kind {kind!r} must be exactly one of "
+                         f"{list(STOP_BASIS_KINDS)}")
+        level = text_decimal(basis["level"])
+        if level is None:
+            report.block("stop_semantics.basis.level must be a positive decimal TEXT "
+                         f"(<= {PRICE_DP} places); got {basis['level']!r}")
+        if not (isinstance(evidence, str) and evidence.strip()):
+            report.block("stop_semantics.basis.evidence must be non-empty text that supports the level")
+    activation = raw.get("activation")
+    if activation not in STOP_ACTIVATIONS:
+        report.block(f"stop_semantics.activation {activation!r} must be exactly one of "
+                     f"{list(STOP_ACTIVATIONS)}")
+    reclaim = raw.get("reclaim_by")
+    if activation == "NEXT_SESSION_FAILURE_TO_RECLAIM":
+        if not (isinstance(reclaim, str) and reclaim.strip()):
+            report.block("NEXT_SESSION_FAILURE_TO_RECLAIM needs a non-empty stop_semantics.reclaim_by")
+    elif reclaim is not None and not (isinstance(reclaim, str) and reclaim.strip()):
+        report.block("stop_semantics.reclaim_by must be non-empty text when present")
+    broker = raw.get("broker_implementation")
+    if activation in STOP_ACTIVATIONS and activation != HARD:
+        if not (isinstance(broker, str) and broker.strip()):
+            report.block(f"{activation} needs a non-empty stop_semantics.broker_implementation")
+    elif "broker_implementation" in raw and not (isinstance(broker, str) and broker.strip()):
+        report.block("stop_semantics.broker_implementation must be non-empty text when present")
+    if activation == HARD and level is not None and text_decimal(t["stop_trigger"]) != level:
+        report.block(f"INTRADAY_HARD needs the persisted stop_trigger {t['stop_trigger']} to equal "
+                     f"stop_semantics.basis.level {raw['basis']['level']}")
+    if len(report.blockers) != before:
+        return None
+    return {"activation": activation, "kind": kind, "level": level, "evidence": evidence.strip(),
+            "reclaim_by": reclaim,
+            "broker_implementation": broker.strip() if isinstance(broker, str) else None}
+
+
+def human_only_stop(stop: dict[str, Any], t: dict[str, Any]) -> dict[str, Any]:
+    """Monitoring/exit procedure for a stop that must not become a live broker stop."""
+    return {"live_broker_stop": False, "activation": stop["activation"],
+            "basis": {"kind": stop["kind"], "level": str(stop["level"]), "evidence": stop["evidence"]},
+            "reclaim_by": stop["reclaim_by"],
+            "human_only_procedure": stop["broker_implementation"],
+            "economic_reference_only": {"stop_trigger": t["stop_trigger"], "stop_limit": t["stop_limit"]},
+            "note": "No live broker stop is placed at this level. The human monitors and exits by the "
+                    "persisted procedure; the ticket's numeric stop fields only price the plan's risk."}
+
+
 def approval_gate(report: Report, t: dict[str, Any], service_audit: Any,
                   allowed_states: tuple[str, ...]) -> None:
     """Human approval linked to these exact terms, read from the persisted service record.
@@ -490,6 +586,7 @@ def check_ticket(report: Report, t: Any, service_audit: Any,
     lane_gate(report, t, p)
     check_terms_math(report, t, p)
     check_veto_review(report, t)
+    p["stop_semantics"] = parse_stop_semantics(report, t)
     approval_gate(report, t, service_audit, allowed_states)
     return p
 
@@ -545,8 +642,14 @@ def pre_submit(
     assert bid is not None and ask is not None
 
     e0, e1, st, sl = p["entry_planned"], p["entry_max"], p["stop_trigger"], p["stop_limit"]
+    stop = p["stop_semantics"]
+    hard = stop["activation"] == HARD
     if st >= bid:
-        report.block(f"stop trigger {st} is not below bid {bid}: it would trigger at once")
+        if hard:
+            report.block(f"stop trigger {st} is not below bid {bid}: it would trigger at once")
+        else:
+            report.warn(f"bid {bid} is at or below the reference stop level {st}; the "
+                        f"{stop['activation']} plan's own rule decides, read it with the human")
     if t["execution_mode"] == "MARKETABLE_LIMIT":
         if ask > e1:
             report.block(f"ask {ask} is above the approved entry_max {e1}: do not chase, do not "
@@ -565,6 +668,8 @@ def pre_submit(
     tick = text_decimal(str(cfg["tick"])) if cfg.get("tick") is not None else None
     if tick:
         for label, price in (("order limit", limit), ("stop trigger", st), ("stop limit", sl)):
+            if label != "order limit" and not hard:
+                continue
             if price % tick:
                 report.block(f"{label} {price} is not a multiple of tick {tick}")
     pct = text_decimal(str(cfg["price_limit_pct"]), zero=True) if cfg.get("price_limit_pct") else None
@@ -586,8 +691,13 @@ def pre_submit(
     else:
         report.warn("U.S. same-day sale is allowed at the contract level; margin and day-trade "
                     "restrictions are the broker's, check the broker screen")
-    report.warn("gap-through risk: if price opens or falls past the stop limit, the stop-limit does "
-                "not fill and the position stays open; the loss at the limit is not a ceiling")
+    if hard:
+        report.warn("gap-through risk: if price opens or falls past the stop limit, the stop-limit "
+                    "does not fill and the position stays open; the loss at the limit is not a ceiling")
+    else:
+        report.warn(f"{stop['activation']}: no live broker stop protects this position; price can "
+                    "move past the reference level before the human acts, so the loss is not capped by "
+                    "max_loss_amount")
 
     at_reference, at_worst = economics(p, reference), economics(p, e1)
     min_r = p["min_reward_risk"]
@@ -617,9 +727,15 @@ def pre_submit(
                   "evidence_sha256": sha256_file(quote_evidence)
                   if quote_evidence and quote_evidence.is_file() else None},
         "order_form": order_form,
-        "protective_plan": {"description": stop_limit_text(st, sl), "stop_trigger": str(st),
-                            "stop_limit": str(sl), "place_after_fill_only": True,
-                            "min_sessions_before_exit": prof["min_sessions_before_exit"]},
+        "stop_semantics": {"activation": stop["activation"],
+                           "basis": {"kind": stop["kind"], "level": str(stop["level"]),
+                                     "evidence": stop["evidence"]},
+                           "reclaim_by": stop["reclaim_by"],
+                           "broker_implementation": stop["broker_implementation"]},
+        **({"protective_plan": {"description": stop_limit_text(st, sl), "stop_trigger": str(st),
+                                "stop_limit": str(sl), "place_after_fill_only": True,
+                                "min_sessions_before_exit": prof["min_sessions_before_exit"]}}
+           if hard else {"human_only_stop_plan": human_only_stop(stop, t)}),
         "calculation": {
             "quantity": p["quantity"], "max_cash_needed": money(e1 * qty + p["fee_estimate"]),
             "capital_budget": str(p["capital_budget"]), "risk_budget": money_or_none(p["risk_budget"]),
@@ -649,6 +765,13 @@ def protective(ticket: Any, service_audit: Any, trigger_raw: Any, limit_raw: Any
     t, market = ticket, ticket["market"]
     prof = t["profile"]
     pos = t["position"]
+    stop = p["stop_semantics"]
+    if stop is not None and stop["activation"] != HARD:
+        report.block(f"stop_semantics.activation is {stop['activation']}, not INTRADAY_HARD: no live "
+                     "protective stop may be shown, validated, or attached for this ticket; follow the "
+                     "human-only procedure instead")
+        return report.finish({"ticket_id": t["ticket_id"], "market": market,
+                              "human_only_stop_plan": human_only_stop(stop, t)})
     trigger = text_decimal(str(trigger_raw)) if trigger_raw not in (None, "") else None
     limit = text_decimal(str(limit_raw)) if limit_raw not in (None, "") else None
     if trigger is None or limit is None:
@@ -719,6 +842,136 @@ def protective(ticket: Any, service_audit: Any, trigger_raw: Any, limit_raw: Any
         "loss_at_stop_trigger_before_exit_fee": money((avg - trigger) * shares + fees),
         "loss_if_stop_fills_at_limit_before_exit_fee": money(loss_at_limit),
     })
+
+
+# ------------------------------------------------------------------------- post-trade review
+
+REVIEW_ARGS_REQUIRED = ("ticket_id", "reviewed_by", "outcome", "note", "occurred_at", "idempotency_key")
+REVIEW_ARGS_ALLOWED = (*REVIEW_ARGS_REQUIRED, "annotation_id")
+HISTORICAL_KEYS = ("historical_import", "pre_system_trade", "historical_id")
+HIST_ARGS_REQUIRED = ("historical_id", "reviewed_by", "outcome", "note", "occurred_at",
+                      "idempotency_key")
+HIST_ARGS_ALLOWED = (*HIST_ARGS_REQUIRED, "annotation_id")
+
+
+def post_trade_review(ticket: Any, service_audit: Any, args: Any) -> dict[str, Any]:
+    """Gate the args of one `mark_reviewed`; never writes and never infers an outcome or note.
+
+    Only the ticket's current terminal state is checked, not the execution approval gate or stop
+    semantics: historical tickets that predate stop semantics must stay reviewable.
+    """
+    report = Report()
+    ident = ticket.get("ticket_id") if isinstance(ticket, dict) else None
+    if isinstance(ticket, dict) and any(k in ticket for k in HISTORICAL_KEYS):
+        report.block("this state is a historical import; mark_reviewed never touches it. Use the "
+                     "`historical-post-trade-review` subcommand and the mark_historical_reviewed op")
+        return report.finish({"op": "mark_reviewed", "ticket_id": ident}, ok="ARGS_OK")
+    if parse_terms(report, ticket) is None:
+        return report.finish({"op": "mark_reviewed", "ticket_id": ident}, ok="ARGS_OK")
+    state = ticket["state"]
+    if state == "REVIEWED":
+        report.block("ticket is already REVIEWED; a ticket is reviewed once")
+    elif state not in TERMINAL_STATES:
+        report.block(f"ticket state is {state!r}; post-trade review needs exactly one of "
+                     f"{list(TERMINAL_STATES)}")
+    if ticket["journal_state"] != state:
+        report.block(f"state journal says {ticket['journal_state']} but facts derive {state}")
+    if not (isinstance(service_audit, dict) and service_audit.get("available") is True
+            and service_audit.get("ok") is True and service_audit.get("tickets") == 1
+            and service_audit.get("issues") == []):
+        report.block("lifecycle service audit is missing or not clean for exactly this ticket")
+    if not isinstance(args, dict):
+        report.block("args JSON must be an object of mark_reviewed keyword arguments")
+        return report.finish({"op": "mark_reviewed", "ticket_id": ident}, ok="ARGS_OK")
+    for key in args:
+        if key not in REVIEW_ARGS_ALLOWED:
+            report.block(f"unexpected key {key!r} for mark_reviewed; allowed: "
+                         f"{sorted(REVIEW_ARGS_ALLOWED)} (never now, human_confirmed, terms_sha256)")
+    for key in REVIEW_ARGS_REQUIRED:
+        if key not in args:
+            report.block(f"missing required key {key!r}; outcome and note come from the user, never "
+                         "from the audit")
+    if "ticket_id" in args and args["ticket_id"] != ident:
+        report.block(f"args ticket_id {args['ticket_id']!r} is not the state's ticket_id {ident!r}")
+    actor = args.get("reviewed_by")
+    kind, _, name = (actor if isinstance(actor, str) else "").partition(":")
+    if "reviewed_by" in args and not (kind == "human" and name.strip()):
+        report.block(f"reviewed_by must be 'human:<name>'; got {actor!r}")
+    if "outcome" in args:
+        allowed = REVIEW_OUTCOMES_BY_STATE.get(state, ())
+        if state in ("CANCELLED", "EXPIRED", "REJECTED") and ticket["position"] is not None:
+            report.block(f"{state} ticket has a position: the service offers no review outcome")
+        elif args["outcome"] not in allowed:
+            report.block(f"outcome {args['outcome']!r} is not allowed for state {state}; allowed: "
+                         f"{list(allowed)}")
+    for key in ("note", "idempotency_key", "annotation_id"):
+        if key in args and not (isinstance(args[key], str) and args[key].strip())                 and not (key == "annotation_id" and args[key] is None):
+            report.block(f"{key} must be non-empty text")
+    if "occurred_at" in args and not parse_time(args["occurred_at"]):
+        report.block("occurred_at must be ISO-8601 with a UTC offset, e.g. 2026-10-27T09:31:00-04:00")
+    return report.finish({"op": "mark_reviewed", "ticket_id": ident, "state": state,
+                          "service_command": "apply --op mark_reviewed --args-json <file>"},
+                         ok="ARGS_OK")
+
+
+def historical_post_trade_review(state: Any, service_audit: Any, args: Any) -> dict[str, Any]:
+    """Gate the args of one `mark_historical_reviewed`; never writes and never infers anything.
+
+    A historical import has no plan, approval, or stop semantics, so only its markers, its current
+    CLOSED state, the service audit, and the args are checked.
+    """
+    report = Report()
+    ident = state.get("historical_id") if isinstance(state, dict) else None
+    head = {"op": "mark_historical_reviewed", "historical_id": ident}
+    if not isinstance(state, dict):
+        report.block("state is not a JSON object")
+        return report.finish(head, ok="ARGS_OK")
+    for key in ("historical_import", "pre_system_trade"):
+        if state.get(key) is not True:
+            report.block(f"state.{key} must be true: this gate reviews only a pre-system historical "
+                         "import; a normal ticket uses `post-trade-review`")
+    if not (isinstance(ident, str) and ident.strip()):
+        report.block("state.historical_id must be non-empty text")
+    current = state.get("state")
+    if current == "REVIEWED":
+        report.block("historical trade is already REVIEWED; it is reviewed once")
+    elif current != "CLOSED":
+        report.block(f"historical trade state is {current!r}; review needs exactly 'CLOSED'")
+    if state.get("journal_state", current) != current:
+        report.block(f"state journal says {state.get('journal_state')} but facts derive {current}")
+    if not (isinstance(service_audit, dict) and service_audit.get("available") is True
+            and service_audit.get("ok") is True and service_audit.get("issues") == []):
+        report.block("lifecycle service audit is missing or not clean")
+    if not isinstance(args, dict):
+        report.block("args JSON must be an object of mark_historical_reviewed keyword arguments")
+        return report.finish(head, ok="ARGS_OK")
+    for key in args:
+        if key not in HIST_ARGS_ALLOWED:
+            report.block(f"unexpected key {key!r} for mark_historical_reviewed; allowed: "
+                         f"{sorted(HIST_ARGS_ALLOWED)}")
+    for key in HIST_ARGS_REQUIRED:
+        if key not in args:
+            report.block(f"missing required key {key!r}; outcome and note come from the user")
+    if "historical_id" in args and args["historical_id"] != ident:
+        report.block(f"args historical_id {args['historical_id']!r} is not the state's {ident!r}")
+    actor = args.get("reviewed_by")
+    kind, _, name = (actor if isinstance(actor, str) else "").partition(":")
+    if "reviewed_by" in args and not (kind == "human" and name.strip()):
+        report.block(f"reviewed_by must be 'human:<name>'; got {actor!r}")
+    if "outcome" in args and args["outcome"] not in REVIEW_OUTCOMES_BY_STATE["CLOSED"]:
+        report.block(f"outcome {args['outcome']!r} is not allowed for a CLOSED historical trade; "
+                     f"allowed: {list(REVIEW_OUTCOMES_BY_STATE['CLOSED'])}")
+    for key in ("note", "idempotency_key"):
+        if key in args and not (isinstance(args[key], str) and args[key].strip()):
+            report.block(f"{key} must be non-empty text")
+    if "annotation_id" in args and not (isinstance(args["annotation_id"], str)
+                                        and args["annotation_id"].strip()):
+        report.block("annotation_id must be non-empty text when present")
+    if "occurred_at" in args and not parse_time(args["occurred_at"]):
+        report.block("occurred_at must be ISO-8601 with a UTC offset, e.g. 2026-10-27T09:31:00-04:00")
+    return report.finish({**head, "state": current,
+                          "service_command": "apply --op mark_historical_reviewed --args-json <file>"},
+                         ok="ARGS_OK")
 
 
 # ----------------------------------------------------------------------------- check-args
@@ -886,6 +1139,17 @@ def main() -> int:
     prot.add_argument("--stop-limit", required=True)
     prot.add_argument("--shares", required=True, help="Shares the protective order covers.")
 
+    rev = sub.add_parser("post-trade-review")
+    add_gate_args(rev)
+    rev.add_argument("--args-json", type=Path, required=True,
+                     help="mark_reviewed args file built from the user's explicit outcome and note.")
+
+    hrev = sub.add_parser("historical-post-trade-review")
+    add_gate_args(hrev)
+    hrev.add_argument("--args-json", type=Path, required=True,
+                      help="mark_historical_reviewed args file built from the user's explicit "
+                           "outcome and note.")
+
     chk = sub.add_parser("check-args")
     chk.add_argument("--op", required=True)
     chk.add_argument("--args-json", type=Path, required=True)
@@ -909,6 +1173,12 @@ def main() -> int:
             result = check_args(args.op, load_json(args.args_json))
         elif args.command == "scale-up-proposal":
             result = scale_up_proposal(load_json(args.result), args.strategy)
+        elif args.command == "post-trade-review":
+            result = post_trade_review(load_json(args.state), load_json(args.service_audit),
+                                       load_json(args.args_json))
+        elif args.command == "historical-post-trade-review":
+            result = historical_post_trade_review(load_json(args.state), load_json(args.service_audit),
+                                                  load_json(args.args_json))
         elif args.command == "protective":
             result = protective(load_json(args.state), load_json(args.service_audit),
                                 args.stop_trigger, args.stop_limit, args.shares)

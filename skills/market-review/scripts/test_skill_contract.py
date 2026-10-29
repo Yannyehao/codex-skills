@@ -100,6 +100,79 @@ class CanonicalCards(unittest.TestCase):
         self.assertAll(self.contract, "the service's `list`, `state`, `cards`, `audit`, `hierarchy` only")
 
 
+class StopSemanticsDraftContract(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.draft = read(MR / "references" / "ticket-draft.md")
+        cls.skill = read(MR / "SKILL.md")
+        cls.raw_draft = (MR / "references" / "ticket-draft.md").read_text(encoding="utf-8")
+
+    def test_every_executable_draft_must_carry_the_exact_stop_semantics_object_in_review(self) -> None:
+        self.assertIn("Every new draft's args carry a top-level `stop_semantics`", self.draft)
+        for term in ("basis", "kind", "level", "evidence", "activation", "reclaim_by", "broker_implementation",
+                     "ENTRY_CANDLE_LOW", "PRIOR_B1_N_LOW", "WHITE_LINE", "YELLOW_LINE",
+                     "KEY_K_OR_PLATFORM", "INTRADAY_HARD", "CLOSE_CONFIRM",
+                     "NEXT_SESSION_FAILURE_TO_RECLAIM"):
+            self.assertIn(term, self.draft)
+        self.assertIn('"stop_semantics": {"basis"', self.raw_draft)
+        self.assertNotIn('"review": {', self.raw_draft)
+        self.assertIn("required for NEXT_SESSION_FAILURE_TO_RECLAIM", self.draft)
+        self.assertIn("`stop_semantics` is a top-level keyword argument of `create_draft_from_plan`", self.draft)
+        self.assertIn("never pass a caller-built `review` object", self.draft)
+        self.assertIn("Every new draft's args must carry the human-approved top-level `stop_semantics`", self.skill)
+
+    def test_broker_implementation_rule_and_source_status_wording(self) -> None:
+        self.assertIn("required for CLOSE_CONFIRM and NEXT_SESSION_FAILURE_TO_RECLAIM, optional for "
+                      "INTRADAY_HARD but non-empty if present", self.draft)
+        playbook = (MR / "references" / "strategy-stop-playbook.md").read_text(encoding="utf-8")
+        self.assertIn("optional for `INTRADAY_HARD`, but never empty when given", playbook)
+        self.assertIn("locally verified outside this public repository", playbook)
+        self.assertIn("portable date and section anchors", playbook)
+        self.assertNotIn("owner's instruction", playbook)
+        self.assertNotIn("the owner confirms", playbook)
+
+    def test_review_persists_the_human_plan_and_never_invents_it(self) -> None:
+        for phrase in ("You do not choose, tighten, or translate it",
+                       "the stop plan the human approved",
+                       "If the user has not stated both a basis and an activation, ask and write nothing",
+                       "do not default them from the setup name",
+                       "never by moving the level or changing the activation"):
+            self.assertIn(phrase, self.draft)
+        self.assertIn("you persist it and never invent it", self.skill)
+
+    def test_enforcement_and_readback_are_stated(self) -> None:
+        self.assertIn("`stop_trigger` must equal `basis.level`", self.draft)
+        self.assertIn("no live broker stop is placed at that level", self.draft)
+        self.assertIn("`$trade-execution` blocks every execution audit", self.draft)
+        self.assertIn("confirm `review.stop_semantics` is present and equals what the user approved", self.draft)
+        self.assertIn("do not tell the user the draft is executable", self.draft)
+
+    def test_documented_vocabulary_matches_the_auditor(self) -> None:
+        import sys
+        sys.path.insert(0, str(SKILLS / "trade-execution" / "scripts"))
+        try:
+            import audit_ticket as auditor
+        finally:
+            sys.path.pop(0)
+        for name in auditor.STOP_BASIS_KINDS + auditor.STOP_ACTIVATIONS + auditor.STOP_KEYS:
+            self.assertIn(name, self.draft)
+
+
+class StopTemplateWorkflow(unittest.TestCase):
+    def test_drafting_runs_the_template_helper_before_create_draft(self) -> None:
+        draft = read(MR / "references" / "ticket-draft.md")
+        skill = read(MR / "SKILL.md")
+        for text in (draft, skill):
+            self.assertIn("stop_template.py", text)
+            self.assertIn("strategy-stop-playbook.md", text)
+        for phrase in ("ask and write nothing", "never calculate the level", "trigger_text_append",
+                       "never in `stop_trigger` / `stop_limit`", "never selects a template"):
+            self.assertIn(phrase, draft)
+        self.assertIn("there is no default template", skill)
+        self.assertIn("never selects or re-runs a template",
+                      read(SKILLS / "trade-execution" / "references" / "stop-semantics.md"))
+
+
 class ThinProfiles(unittest.TestCase):
     def test_profiles_hold_market_facts_only(self) -> None:
         for name in ("us-profile.md", "a-profile.md"):

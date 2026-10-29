@@ -21,7 +21,7 @@ $svc = @('-X','utf8','-m','zradar.trade_lifecycle')
 ## What `state` prints (the fields the audit relies on)
 
 Ticket columns, unchanged: `ticket_id market symbol episode_id plan_id source_decision_id strategy execution_mode thesis trigger_text invalidation entry_planned entry_max stop_kind stop_trigger stop_limit expiry_date capital_budget quantity fee_estimate risk_amount max_loss_amount reward_amount r_multiple currency setup_quality decision_lane capital_stage risk_budget min_reward_risk profile_sha256 terms_sha256 created_by created_at`.
-Parsed JSON columns: `review` (source evidence, `veto_review`, `mode_hint`, `deviation_note`, `capital_contract`), `order_template`, `targets` (`[{"price": "..."}]`), `fee_assumption`, `profile` (the market profile frozen at drafting, parsed: `market currency lot_size min_sessions_before_exit odd_lot_exit_closes_only price_limit fee_components calendar tdx`; it must hash to `profile_sha256`).
+Parsed JSON columns: `review` (source evidence, `veto_review`, `mode_hint`, `deviation_note`, `capital_contract`, and the persisted `stop_semantics` that every execution audit requires), `order_template`, `targets` (`[{"price": "..."}]`), `fee_assumption`, `profile` (the market profile frozen at drafting, parsed: `market currency lot_size min_sessions_before_exit odd_lot_exit_closes_only price_limit fee_components calendar tdx`; it must hash to `profile_sha256`).
 Persisted approval: `approval` is `null` until a human approves, then `{event_seq, approved_by, approved_at, terms_sha256, matches_ticket_terms, note}` taken from the stored `APPROVED` event. It is read-only evidence of what was approved, not an approval input.
 Derived: `state`, `journal_state`, `state_at`, `approved_by`, `approved_at`, `orders[]` (`order_id role side status filled_qty terms{order_type quantity limit_price stop_trigger max_price tif expiry_date} events`), `position` (`open_qty entry_qty exit_qty avg_entry_price fees_total closed fills[]` or `null`), `outcome`, `events[]` (`seq event_type state_after actor occurred_at ref_kind ref_id`).
 
@@ -34,6 +34,8 @@ Vocabulary is exact: `market` `US`/`A`; `execution_mode` `MARKETABLE_LIMIT`/`PAS
     --session-date <YYYYMMDD> --bid <bid> --ask <ask> `
     --quote-evidence <broker quote screenshot> [--prev-close <A-share prev close>]
 & <python> -X utf8 scripts\audit_ticket.py protective --state ... --service-audit ... --stop-trigger <t> --stop-limit <l> --shares <n>
+& <python> -X utf8 scripts\audit_ticket.py post-trade-review --state ... --service-audit ... --args-json <mark_reviewed args file>
+& <python> -X utf8 scripts\audit_ticket.py historical-post-trade-review --state ... --service-audit ... --args-json <mark_historical_reviewed args file>
 & <python> -X utf8 scripts\audit_ticket.py check-args --op <op> --args-json <args file>
 & <python> -X utf8 scripts\audit_ticket.py idempotency-key --ticket-id <id> --op <op> [--broker-ref <id>] [--evidence <file>]
 & <python> -X utf8 scripts\audit_ticket.py scale-up-proposal --result <scale-up output> --strategy <exact strategy text>
@@ -58,7 +60,39 @@ There is no hash argument. The approved hash is `state.approval.terms_sha256`, p
 
 Value rules enforced by `check-args` (and by the service): prices, `fee`, `max_price` as decimal strings with at most 4 places; `quantity` a positive integer; dates `YYYYMMDD`; `occurred_at` ISO-8601 with an offset (`2026-10-27T09:31:00-04:00`); `evidence` a JSON object (file name and SHA-256, never a machine path); `submitted_by` / `amended_by` / `cancelled_by` / `recorded_by` of `expire_ticket` are `human:<name>`; fills, cancel/expire/reject use `human:` or `import:`.
 
-Never prepared by this skill: `approve` (the human's own act, with the terms hash they reviewed), `create_draft` (only `$market-review` on an explicit 固化), `mark_reviewed`, `migrate`.
+Never prepared by this skill: `approve` (the human's own act, with the terms hash they reviewed), `create_draft` (only `$market-review` on an explicit 固化), `migrate`.
+
+`attach_stop` needs a successful state-aware `protective` result first. `check-args --op attach_stop` validates only the shape of the args file and has no ticket state, so it cannot know the persisted `stop_semantics.activation`; `protective` blocks unless it is `INTRADAY_HARD`, and any other activation is never attached ([stop-semantics.md](stop-semantics.md)). Every execution audit also blocks when `review.stop_semantics` is missing or malformed.
+
+`mark_reviewed` and `mark_historical_reviewed` stay forbidden in `check-args`. In SKILL.md's post-trade review mode `mark_reviewed` is prepared only through the dedicated `post-trade-review` gate, then run with the lifecycle service `apply --op mark_reviewed --args-json <file>`. The generic gate explicitly blocks any state carrying historical-import markers (`historical_import`, `pre_system_trade`, `historical_id`) before it parses a normal ticket. A historical import uses the separate gate below.
+
+- Inputs: the unedited `state` and `audit --ticket-id` output plus the args file. It prints `ARGS_OK` or `BLOCKED` and never writes.
+- Requires the current `state` to be exactly `CLOSED`, `CANCELLED`, `EXPIRED`, or `REJECTED` (not `REVIEWED`, not anything open), `journal_state` equal to it, and a clean service audit.
+- Args: `ticket_id` (equal to the state's), `reviewed_by` `human:<name>`, `outcome`, `note` (non-empty), `occurred_at` (with a UTC offset), `idempotency_key` (non-empty), optional non-empty `annotation_id`; no other keys.
+- `outcome` is one of the service's: `CLOSED` takes `机会识别成功、执行完成` or `机会识别失败`; `CANCELLED`/`EXPIRED`/`REJECTED` with no position takes `机会识别成功、执行未覆盖` or `机会识别失败`.
+- `outcome` and `note` are the user's explicit words; this skill never infers or fills them. The gate does not require execution-time stop semantics, so historical tickets stay reviewable.
+
+```json
+{"ticket_id": "<id>", "reviewed_by": "human:NAME", "outcome": "<user-stated outcome>", "note": "<user-stated note>",
+ "occurred_at": "2026-10-28T09:00:00-04:00", "idempotency_key": "<stable key>"}
+```
+
+Then read `state` back and report the stored state.
+
+### Historical import review
+
+A pre-system historical import (state shows `historical_import` and `pre_system_trade` true, with a `historical_id`) is reviewed only through `audit_ticket.py historical-post-trade-review --state <state.json> --service-audit <audit.json> --args-json <file>`. It prints `ARGS_OK` or `BLOCKED` and never writes.
+
+- Inputs: the unedited historical `state`, the service `audit`, and the args file.
+- Requires `historical_import` and `pre_system_trade` both true, a current `state` of exactly `CLOSED` (not `REVIEWED`), and a clean service audit.
+- Args: `historical_id` (equal to the state's), `reviewed_by` `human:<name>`, `outcome` (`机会识别成功、执行完成` or `机会识别失败`), `note` (non-empty), `occurred_at` (with a UTC offset), `idempotency_key` (non-empty), optional non-empty `annotation_id`; no other keys.
+- `outcome` and `note` are the user's explicit words; never inferred.
+- After `ARGS_OK`, run the lifecycle service `apply --op mark_historical_reviewed --args-json <file>` (it identifies the trade by `historical_id`), then the mandatory `state` readback, and report the stored state.
+
+```json
+{"historical_id": "<historical_id>", "reviewed_by": "human:NAME", "outcome": "<user-stated outcome>", "note": "<user-stated note>",
+ "occurred_at": "2026-10-28T09:00:00-04:00", "idempotency_key": "<stable key>"}
+```
 
 Example `submit_order` args (the ENTRY limit is at most the approved `entry_max`; a PASSIVE_LIMIT is at most `entry_planned`; the quantity is at most the approved quantity):
 

@@ -1,5 +1,12 @@
 # DEVLOG
 
+## 2026-10-28 · 止损语义、策略模板与历史交易复盘
+- `market-review` 新增受控的 B1 / B2 / 搬砖止损模板脚本：显式选择战法、持仓阶段、松紧环境、止损依据和触发方式；价格由人工计划/读图提供，脚本不从图上猜，也没有默认模板。
+- 搬砖的次日不爆发、红转绿和四红砖等状态/时间退出与价格灾难止损分开保存；B1/B2 的盘中硬止损、收盘确认及次日收不回分别建模，避免执行端擅自改语义。
+- `trade-execution` 在展示或挂保护单前确定性校验 `review.stop_semantics`；只有 `INTRADAY_HARD` 能生成实时 STOP_LIMIT，收盘确认只给人工监控/退出流程。
+- 新增普通交易和历史导入交易两条独立的事后复盘门禁；MSFT 这类上线前成交使用 `mark_historical_reviewed`，保留原成交与错误委托，不事后篡改原计划。
+- market-review 58 项、trade-execution 115 项契约测试通过；两项 Skill 均通过 skill-creator 快速校验。
+
 ## 2026-10-27 · 复盘与执行 Skill 正式回收源仓库
 - 将本机已验证的 `market-review` 与 `trade-execution` 完整源码回收到 `skills/`，包含引用文档、审计脚本、契约测试和 UI 元数据；真实本机目标继续只留在忽略的 `config.local.json`。
 - `market-review` 统一美股 / A股复盘，`trade-execution` 只处理已落库、已批准的交易单；旧 `us-market-review` 收窄为只能显式调用、不携带复盘逻辑的兼容别名，防止与新 Skill 重复触发。

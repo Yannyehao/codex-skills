@@ -15,7 +15,7 @@ The ticket and every state change live in one local SQLite ledger owned by the l
 | `capital_budget`, `risk_budget`, `fee_estimate` | notional ruler (`entry_max × qty + fee`), worst-loss ruler (`max_loss_amount`), fee assumption |
 | `risk_amount`, `max_loss_amount`, `reward_amount`, `r_multiple` | service-computed, recomputed by the audit |
 | `setup_quality`, `decision_lane`, `capital_stage`, `min_reward_risk` | maturity/capital contract, see [capital-maturity.md](capital-maturity.md) |
-| `thesis`, `trigger_text`, `invalidation`, `review` | logic and review evidence; `review.veto_review` holds `n_pattern`, `trend`, `volume`, `macd` each as `{veto, evidence}` |
+| `thesis`, `trigger_text`, `invalidation`, `review` | logic and review evidence; `review.veto_review` holds `n_pattern`, `trend`, `volume`, `macd` each as `{veto, evidence}`; `review.stop_semantics` holds the stop's basis and activation ([stop-semantics.md](stop-semantics.md)) and is required on every executable ticket and validated by `audit_ticket.py`; without it every execution audit is BLOCKED |
 | `terms_sha256` | hash of all terms; approval is bound to it |
 | `profile`, `profile_sha256` | the market profile frozen at drafting, parsed (lot size, T+N, ...); the hash must recompute from it |
 | `approval` | persisted approval fact from the `APPROVED` event: `{event_seq, approved_by, approved_at, terms_sha256, matches_ticket_terms, note}`; `null` until approved |
@@ -30,6 +30,7 @@ Execution proceeds only if all hold, checked by `audit_ticket.py` on the unedite
 - `state` is `APPROVED` (entry) or `PARTIALLY_FILLED` / `POSITION_OPEN` (management), and `journal_state` equals it.
 - Exactly one `APPROVED` event exists, its actor is `human:<name>`, and `approved_by` / `approved_at` equal it. An agent, `review:`, `system:`, bare `human`, or machine approval is not approval.
 - `terms_sha256` is a 64-hex digest and equals the persisted `approval.terms_sha256` read from the service state, which must also report `matches_ticket_terms` and agree with the `APPROVED` event (actor, time, sequence). Nothing is typed in by the user. A missing `approval` or a different hash means different or no approved terms: stop; draft and approve a new ticket.
+- `review.stop_semantics` is present and valid (`basis.kind`, decimal-text `basis.level` with non-empty `basis.evidence`, `activation`, `reclaim_by` where required, `broker_implementation` required for `CLOSE_CONFIRM` / `NEXT_SESSION_FAILURE_TO_RECLAIM`, optional but nonempty if present for `INTRADAY_HARD`); `INTRADAY_HARD` needs `stop_trigger == basis.level`. See [stop-semantics.md](stop-semantics.md).
 - `profile` is the service's frozen profile for the ticket's market and hashes to `profile_sha256`; lot size and T+N are read from it.
 - `audit --ticket-id` reports `available`, `ok`, one ticket, no issues (`terms_hash_mismatch`, `lane_gate_violation`, `approved_non_approvable_lane` and the rest are blockers).
 - The ticket is read from the service. A ticket rebuilt from chat, a screenshot, a review paragraph, or Notion does not exist for this skill.
