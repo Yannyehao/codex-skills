@@ -19,7 +19,22 @@ Exact schema, enforced by `scripts/audit_ticket.py`: `basis` has exactly `kind`,
 
 `basis.kind` is one of `ENTRY_CANDLE_LOW` (buy or post-entry candle low), `PRIOR_B1_N_LOW` (the prior B1 or N-pattern low), `WHITE_LINE`, `YELLOW_LINE`, `KEY_K_OR_PLATFORM` (key candle or platform low). `basis.level` is the price and `basis.evidence` ties it to the ticket's `thesis`, `trigger_text`, or `invalidation`. A level the thesis never supports is unsupported: BLOCK.
 
-Which basis fits which setup is drafting guidance owned by `$market-review` (its stop-template helper selects a named template before the draft); this skill assigns none, never selects or re-runs a template, and only audits the persisted object. For reference only, as examples of what a ticket may state and never as defaults to apply: for B1 the structural stop sits below the buy candle or the prior N low; for B2 the first defense is the entry candle low on a closing basis, and the full structural stop can be the prior B1/N low.
+Which basis fits which trade is owned by `$market-review`: its helper derives the stop from one canonical `trade_type` (policy `zge-stop-v1`) before the draft; this skill assigns none, never selects or re-runs a trade type, and only audits the persisted object.
+
+### Canonical marker (`policy=zge-stop-v1`)
+
+Drafts from the helper start `basis.evidence` with exactly `canonical_trade_type=<TYPE>; policy=zge-stop-v1`. When that marker is present the audit enforces the unique mapping and BLOCKS an unknown type or policy, a duplicate or incomplete marker, or a mismatch with the persisted `basis.kind` / `activation`:
+
+| `canonical_trade_type` | `basis.kind` | `activation` |
+|---|---|---|
+| `B1_KLINE_REVERSAL` | `ENTRY_CANDLE_LOW` | `CLOSE_CONFIRM` |
+| `B1_WHITE_LINE_SHORT` | `WHITE_LINE` | `CLOSE_CONFIRM` |
+| `B1_YELLOW_LINE_SWING` | `YELLOW_LINE` | `CLOSE_CONFIRM` |
+| `B2_FRESH_CONFIRMATION` | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` |
+| `B2_RISEN_PULLBACK` | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` |
+| `BRICK_ZERO_DAY` | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` |
+
+`B1`, `B2`, `BRICK` alone and `COMPOSITE` are unknown and block. Every ticket entering `pre-submit` or `protective` must carry exactly one `canonical_trade_type=<TYPE>` and exactly one `policy=zge-stop-v1` marker in `basis.evidence`; a missing marker BLOCKS execution. Terminal `post-trade-review` and `historical-post-trade-review` have separate paths, need no stop semantics or marker, and historical post-trade review is unchanged. The holding/time rules (and the non-price `PROFIT_TO_LOSS_INTRADAY`) live in the ticket's `trigger_text`, are judged by the human, and are never stop prices or broker orders.
 
 ## Activation: when the stop acts
 

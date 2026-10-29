@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Deterministic stop-template selector for ticket drafting (references/strategy-stop-playbook.md).
+"""Canonical stop policy zge-stop-v1 for ticket drafting (references/strategy-stop-playbook.md).
 
-Pure and offline: no database, network, broker, clock, chart, or file access. Every selector is
-explicit and there is no default template; unsupported or contradictory input is BLOCKED and emits no
-`stop_semantics`. The level is decimal TEXT supplied by the caller from the human's chart reading; this script never reads
-or derives a price from a chart.
+Pure and offline: no database, network, broker, clock, chart, or file access. The review selects one
+canonical `trade_type`; it alone determines the stop basis kind, activation, broker mode and the
+holding/time exits. The caller supplies only the chart-derived `basis_level` (decimal TEXT) and the
+chart `evidence`; this script never reads or derives a price from a chart. Regime, position state,
+template ids, basis kinds, activations and broker modes are not inputs and are never choices.
+Unsupported input is BLOCKED and emits no `stop_semantics`.
 
-  python -X utf8 stop_template.py --setup B2 --position-state FRESH_UNFLOWN --regime TIGHT \
-      --template-id B2_TIGHT_ENTRY_LOW_INTRADAY_HARD --basis-kind ENTRY_CANDLE_LOW --basis-level 10.25 \
-      --evidence "<chart reading>" --broker-mode LIVE_STOP_LIMIT [--broker-implementation "<human text>"]
-  python -X utf8 stop_template.py --list-templates
+  python -X utf8 stop_template.py --trade-type B2_RISEN_PULLBACK --basis-level 10.25 \
+      --evidence "<chart reading>"
+  python -X utf8 stop_template.py --list-trade-types
 
 Exit 0 = OK (JSON fragment on stdout), 2 = BLOCKED (JSON with errors), 64 = usage error.
 """
@@ -23,10 +24,9 @@ import sys
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-SETUPS = ("B1", "B2", "BRICK")
-POSITION_STATES = ("FRESH_UNFLOWN", "FLOWN", "ALREADY_RISEN")
-REGIMES = ("TIGHT", "LOOSE")
-BROKER_MODES = ("LIVE_STOP_LIMIT", "HUMAN_ONLY_ALERT")
+POLICY = "zge-stop-v1"
+MARKER_TYPE_KEY = "canonical_trade_type"
+MARKER_POLICY_KEY = "policy"
 PRICE_DP = 4
 # Persisted shape; must equal trade-execution/scripts/audit_ticket.py (checked by the tests).
 STOP_KEYS = ("basis", "activation", "broker_implementation")
@@ -34,107 +34,81 @@ STOP_KEYS = ("basis", "activation", "broker_implementation")
 CLOSE_RULE = ("Act only if the regular-session close is beyond {level}; an intraday print through it is "
               "not a violation. No live intraday stop is placed at this level.")
 HARD_RULE = "Any trade through {level} during the session exits; implement as a live protective stop-limit."
+CLOSE_HOLD = ("Hold while closes stay at or above {level}; set a close-based alert and exit manually after "
+              "the close if it triggers.")
+CLOSE_PROCEDURE = ("Human only: set a close-based alert at {level} and, if the regular-session close is "
+                   "beyond it, exit manually after the close. No live broker stop.")
+HARD_PROCEDURE = "Place a live protective stop-limit at {level} after the entry fill."
 NOT_STOPS = ("These are holding/exit rules judged by the human at the stated time. They are not prices "
-             "and are never turned into a stop level or a live broker order. Trend, N, volume and MACD gates are "
-             "checked elsewhere; the regime alone neither allows nor vetoes them.")
+             "and are never turned into a stop level or a live broker order.")
 
-SRC_B1 = "2025-11-12 B1 fresh entry candle vs flown wider N/white-line"
-SRC_YELLOW = "2025-12-03 / 2026-01-21 yellow-line structural stop alternative for B1/B2"
-SRC_B2 = "2025-10-06 B2 prior B1/N low and two-session rule"
-SRC_B2_LOW = "2025-10-06 B2 prior B1/N low"
-SRC_B2_TIGHT = "2026-01-14 / 2026-01-07 B2 tight entry-low intraday variant"
-SRC_RISEN = "2026-01-21 already-risen B2 pullback rule"
-SRC_BRICK = "2026-03-18 brick next-open no-rise and red->green / four-brick rules"
-SRC_REGIME = "2025-11-26 tight/loose regime context"
 SRC_META = "2026-04-22 close-vs-intraday meta-rule"
 
+# Separate non-price rule attached to every trade type; never a structural stop.
+PROFIT_TO_LOSS = ("PROFIT_TO_LOSS_INTRADAY", "STATE",
+                  "Only a position that was already profitable and turns into a loss is an intraday exit; "
+                  "this is a holding rule, not a structural stop and not a price level.")
 
-def _t(setup, states, regimes, kinds, activation, broker, sources, invalidation, holding, rules=()):
-    return {"setup": setup, "position_states": states, "regimes": regimes, "basis_kinds": kinds,
-            "activation": activation, "broker_mode": broker, "sources": sources,
-            "invalidation": invalidation, "holding": holding, "exit_rules": rules}
+
+def _t(kind, activation, broker, sources, invalidation, holding, rules=()):
+    return {"basis_kind": kind, "activation": activation, "broker_mode": broker,
+            "sources": sources + (SRC_META,), "invalidation": invalidation, "holding": holding,
+            "exit_rules": tuple(rules) + (PROFIT_TO_LOSS,)}
 
 
-TEMPLATES: dict[str, dict[str, Any]] = {
-    "B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM": _t(
-        "B1", ("FRESH_UNFLOWN",), ("TIGHT", "LOOSE"), ("ENTRY_CANDLE_LOW",), "CLOSE_CONFIRM",
-        "HUMAN_ONLY_ALERT",
-        (SRC_B1, SRC_REGIME, SRC_META),
-        "Fresh B1 is invalidated when the regular-session close is below the entry-candle low {level}. "
-        + CLOSE_RULE,
-        "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
-        "close if it triggers."),
-    "B1_FRESH_ENTRY_LOW_INTRADAY_HARD": _t(
-        "B1", ("FRESH_UNFLOWN",), ("TIGHT",), ("ENTRY_CANDLE_LOW",), "INTRADAY_HARD",
-        "LIVE_STOP_LIMIT", (SRC_B1, SRC_REGIME, SRC_META),
-        "Explicit hand-tight override (TIGHT regime only; not the normal B1 stop): fresh B1 is invalidated by any trade through the entry-candle "
-        "low {level}. " + HARD_RULE,
-        "Hold only while price stays above {level} intraday; the live stop-limit does the exit."),
-    "B1_FLOWN_N_LOW_WHITE_LINE_CLOSE_CONFIRM": _t(
-        "B1", ("FLOWN",), ("TIGHT", "LOOSE"), ("PRIOR_B1_N_LOW", "WHITE_LINE"), "CLOSE_CONFIRM",
-        "HUMAN_ONLY_ALERT",
-        (SRC_B1, SRC_REGIME, SRC_META),
-        "Flown B1 uses the wider prior N-low or white-line level {level}; it is not valid for a fresh "
-        "unflown entry. " + CLOSE_RULE,
-        "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
-        "close if it triggers."),
-    "B1_FLOWN_YELLOW_LINE_CLOSE_CONFIRM": _t(
-        "B1", ("FLOWN",), ("TIGHT", "LOOSE"), ("YELLOW_LINE",), "CLOSE_CONFIRM", "HUMAN_ONLY_ALERT",
-        (SRC_B1, SRC_YELLOW, SRC_REGIME, SRC_META),
-        "Flown B1 explicit yellow-line structural stop at {level}; an alternative to the N-low/white-line "
-        "template, chosen by the human, never a default. " + CLOSE_RULE,
-        "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
-        "close if it triggers."),
-    "B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM": _t(
-        "B2", ("FRESH_UNFLOWN",), ("LOOSE",), ("PRIOR_B1_N_LOW",), "CLOSE_CONFIRM",
-        "HUMAN_ONLY_ALERT", (SRC_B2, SRC_REGIME, SRC_META),
-        "Fresh B2 structural stop at the prior B1/N low {level}. " + CLOSE_RULE,
-        "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
-        "close if it triggers. A fresh B2 entry also carries the two-session failure-to-explode clock: "
-        "apply the two-session rule of the cited course date as the human has confirmed it."),
-    "B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM": _t(
-        "B2", ("ALREADY_RISEN",), ("LOOSE",), ("PRIOR_B1_N_LOW",), "CLOSE_CONFIRM",
-        "HUMAN_ONLY_ALERT", (SRC_B2_LOW, SRC_RISEN, SRC_REGIME, SRC_META),
-        "Already-risen B2 pullback structural stop at the prior B1/N low {level}. " + CLOSE_RULE,
-        "Hold while closes stay at or above {level} and the human-stated no-S1 context still holds; set a "
-        "close-based alert and exit manually after the close if it triggers. The fresh-entry two-session "
-        "failure-to-explode exit does not apply to an already-risen B2 pullback."),
-    "B2_TIGHT_ENTRY_LOW_INTRADAY_HARD": _t(
-        "B2", ("FRESH_UNFLOWN",), ("TIGHT",), ("ENTRY_CANDLE_LOW",), "INTRADAY_HARD", "LIVE_STOP_LIMIT",
-        (SRC_B2_TIGHT, SRC_REGIME, SRC_META),
-        "Tight B2 variant: invalidated by any trade through the entry-candle low {level}. " + HARD_RULE,
-        "Hold only while price stays above {level} intraday; the live stop-limit does the exit."),
-    "B2_KEY_K_PLATFORM_CLOSE_CONFIRM": _t(
-        "B2", ("FRESH_UNFLOWN", "ALREADY_RISEN"), ("LOOSE",), ("KEY_K_OR_PLATFORM",), "CLOSE_CONFIRM",
-        "HUMAN_ONLY_ALERT", (SRC_B2, SRC_RISEN, SRC_REGIME, SRC_META),
-        "B2 key-candle/platform stop at {level}. " + CLOSE_RULE,
-        "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
-        "close if it triggers."),
-    "B2_YELLOW_LINE_CLOSE_CONFIRM": _t(
-        "B2", ("FRESH_UNFLOWN", "ALREADY_RISEN"), ("LOOSE",), ("YELLOW_LINE",), "CLOSE_CONFIRM",
-        "HUMAN_ONLY_ALERT", (SRC_B2, SRC_YELLOW, SRC_REGIME, SRC_META),
-        "B2 explicit yellow-line structural stop at {level}; an alternative to the prior-low and "
-        "key-K/platform templates, chosen by the human, never a default. " + CLOSE_RULE,
-        "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
-        "close if it triggers."),
-    "BRICK_FRESH_FAILURE_DISASTER": _t(
-        "BRICK", ("FRESH_UNFLOWN",), ("TIGHT", "LOOSE"), ("ENTRY_CANDLE_LOW", "KEY_K_OR_PLATFORM"),
-        "INTRADAY_HARD", "LIVE_STOP_LIMIT", (SRC_BRICK, SRC_REGIME, SRC_META),
-        "Brick disaster stop (price only) at {level}. " + HARD_RULE,
-        "A fresh brick must show strength at the next open; the price stop alone does not decide the hold.",
+TRADE_TYPES: dict[str, dict[str, Any]] = {
+    "B1_KLINE_REVERSAL": _t(
+        "ENTRY_CANDLE_LOW", "CLOSE_CONFIRM", "HUMAN_ONLY_ALERT",
+        ("2025-05-07 B1 stop below the entry K low (2-3 ticks / 1-2%, lose only one K)",
+         "2025-10-06 B1 recover-and-rise within three sessions"),
+        "B1 K-line reversal is invalidated when the regular-session close is below the entry-candle low "
+        "{level}. " + CLOSE_RULE,
+        CLOSE_HOLD,
+        (("B1_THREE_SESSION_RECOVERY", "TIME",
+          "If the position has not recovered and risen within three sessions of entry, exit manually."),)),
+    "B1_WHITE_LINE_SHORT": _t(
+        "WHITE_LINE", "CLOSE_CONFIRM", "HUMAN_ONLY_ALERT",
+        ("2026-02-11 short-term B1 stop at the white line",
+         "2026-04-22 white-line B1 is the cautious variant"),
+        "White-line short B1 is invalidated when the regular-session close is below the white line "
+        "{level}. It is its own trade type, not a fallback of another. " + CLOSE_RULE,
+        CLOSE_HOLD),
+    "B1_YELLOW_LINE_SWING": _t(
+        "YELLOW_LINE", "CLOSE_CONFIRM", "HUMAN_ONLY_ALERT",
+        ("2026-02-11 swing B1 stop at the yellow line; yellow is the last support",),
+        "Yellow-line swing B1 is invalidated when the regular-session close is below the yellow line "
+        "{level}, the last support. " + CLOSE_RULE,
+        CLOSE_HOLD,
+        (("YELLOW_SUPPORT_SECOND_SESSION_CONFIRM", "STATE",
+          "Yellow is the last support: the second session must confirm that resistance is overcome; "
+          "judge it by the human at the stated time."),)),
+    "B2_FRESH_CONFIRMATION": _t(
+        "PRIOR_B1_N_LOW", "CLOSE_CONFIRM", "HUMAN_ONLY_ALERT",
+        ("2025-10-06 B2 stop at the prior B1/N low with a two-session explosion requirement",),
+        "Fresh B2 confirmation is invalidated when the regular-session close is below the prior B1/N low "
+        "{level}. " + CLOSE_RULE,
+        CLOSE_HOLD,
+        (("B2_TWO_SESSION_EXPLOSION", "TIME",
+          "A fresh B2 must explode within two sessions of entry; if it has not, exit manually."),)),
+    "B2_RISEN_PULLBACK": _t(
+        "PRIOR_B1_N_LOW", "CLOSE_CONFIRM", "HUMAN_ONLY_ALERT",
+        ("2026-01-21 risen-B2 pullback with no fresh two-session clock; prior N low intact, no S1",),
+        "Risen B2 pullback is invalidated when the regular-session close is below the prior B1/N low "
+        "{level}. " + CLOSE_RULE,
+        CLOSE_HOLD,
+        (("B2_RISEN_STRUCTURE_HOLD", "STATE",
+          "No fresh two-session clock applies. Hold only while the prior N low is intact and no S1 has "
+          "appeared; judge it by the human at the stated time."),)),
+    "BRICK_ZERO_DAY": _t(
+        "ENTRY_CANDLE_LOW", "INTRADAY_HARD", "LIVE_STOP_LIMIT",
+        ("2026-02-20 brick entry-K low, two-bar gamble",
+         "2026-03-29 brick state and next-open rule"),
+        "Brick zero-day disaster stop (price only) at the entry-candle low {level}. " + HARD_RULE,
+        "A brick must show strength at the next open; the price stop alone does not decide the hold.",
         (("BRICK_NEXT_OPEN_NO_EXPLOSION", "TIME",
-          "If the stock does not rise/explode after the next session's open, exit by manual order even "
-          "though the price stop was not touched."),)),
-    "BRICK_MATURE_DISASTER": _t(
-        "BRICK", ("FLOWN", "ALREADY_RISEN"), ("TIGHT", "LOOSE"), ("ENTRY_CANDLE_LOW", "KEY_K_OR_PLATFORM"),
-        "INTRADAY_HARD", "LIVE_STOP_LIMIT", (SRC_BRICK, SRC_REGIME, SRC_META),
-        "Brick disaster stop (price only) at {level}. " + HARD_RULE,
-        "A mature brick is held by its brick state, not by the price stop alone.",
-        (("BRICK_RED_TO_GREEN", "STATE", "A brick turning from red to green is a state exit signal."),
-         ("BRICK_FOUR_RED_BRICKS", "STATE", "Four red bricks is a state exit signal."),
-         ("BRICK_LAST_THREE_MINUTES", "TIME",
-          "On A-share, decide a state exit in the last three minutes of the session (the closing "
-          "call-auction window, 14:57-15:00); check the broker's cancel rules for that window."))),
+          "If the stock does not lift after the next session's open (check at 9:33 and 9:37), exit by "
+          "manual order even though the price stop was not touched."),
+         ("BRICK_RED_TO_GREEN", "STATE", "A brick turning from red to green is a state exit signal."))),
 }
 
 DECIMAL_RE = re.compile(r"^\d+(\.\d+)?$")
@@ -156,95 +130,79 @@ def _text(value: Any) -> str | None:
     return " ".join(value.split()) if isinstance(value, str) and value.strip() else None
 
 
-def select(setup: Any, position_state: Any, regime: Any, template_id: Any, basis_kind: Any,
-           basis_level: Any, evidence: Any, broker_mode: Any, broker_implementation: Any) -> dict[str, Any]:
+def marker(trade_type: str) -> str:
+    """The exact machine-checkable marker audited by trade-execution/scripts/audit_ticket.py."""
+    return f"{MARKER_TYPE_KEY}={trade_type}; {MARKER_POLICY_KEY}={POLICY}"
+
+
+def select(trade_type: Any, basis_level: Any, evidence: Any) -> dict[str, Any]:
     """Return {"status": "OK", ...fragment} or {"status": "BLOCKED", "errors": [...]}. Never raises."""
     errors: list[str] = []
-
-    def need(name: str, value: Any, allowed: tuple[str, ...]) -> bool:
-        if value not in allowed:
-            errors.append(f"{name} {value!r} must be exactly one of {list(allowed)}")
-            return False
-        return True
-
-    ok = [need("setup", setup, SETUPS), need("position_state", position_state, POSITION_STATES),
-          need("regime", regime, REGIMES), need("broker_mode", broker_mode, BROKER_MODES)]
-    template = TEMPLATES.get(template_id) if isinstance(template_id, str) else None
-    if template is None:
-        errors.append(f"template_id {template_id!r} is required and must be one of {sorted(TEMPLATES)}; "
-                      "there is no default")
-    level, note, impl = _level(basis_level), _text(evidence), _text(broker_implementation)
+    spec = TRADE_TYPES.get(trade_type) if isinstance(trade_type, str) else None
+    if spec is None:
+        errors.append(f"trade_type {trade_type!r} is required and must be exactly one of "
+                      f"{sorted(TRADE_TYPES)}; there is no default and no combined or generic type")
+    level, note = _level(basis_level), _text(evidence)
     if level is None:
         errors.append(f"basis_level must be positive decimal TEXT with at most {PRICE_DP} places, "
                       f"supplied by the caller; got {basis_level!r}")
     if note is None:
         errors.append("evidence must be non-empty text from this review's chart reading")
-    hard = template is not None and template["activation"] == "INTRADAY_HARD"
-    if impl is None and (broker_implementation is not None or not hard):
-        errors.append("broker_implementation must be non-empty text stating how the human implements it"
-                      + ("" if template is None or not hard else " (optional for INTRADAY_HARD, "
-                         "but never empty when given)"))
-    if template is not None:
-        if ok[0] and setup != template["setup"]:
-            errors.append(f"template {template_id} is for setup {template['setup']}, not {setup}")
-        if ok[1] and position_state not in template["position_states"]:
-            errors.append(f"template {template_id} does not allow position_state {position_state}; "
-                          f"allowed {list(template['position_states'])}")
-        if ok[2] and regime not in template["regimes"]:
-            errors.append(f"template {template_id} does not allow regime {regime}; "
-                          f"allowed {list(template['regimes'])}")
-        if basis_kind not in template["basis_kinds"]:
-            errors.append(f"basis_kind {basis_kind!r} is not allowed for {template_id}; "
-                          f"allowed {list(template['basis_kinds'])}")
-        if ok[3] and broker_mode != template["broker_mode"]:
-            errors.append(f"broker_mode {broker_mode} is incompatible with activation "
-                          f"{template['activation']}; this template needs {template['broker_mode']}")
-    if errors or template is None or level is None or note is None:
+    elif f"{MARKER_TYPE_KEY}=" in note or f"{MARKER_POLICY_KEY}=" in note:
+        errors.append("evidence must not contain a policy marker; the helper writes it")
+    if errors or spec is None or level is None or note is None:
         return {"status": "BLOCKED", "errors": errors,
                 "note": "No stop_semantics emitted. Ask the user for the missing or contradictory item "
                         "and write nothing."}
-    source_ref = "; ".join(template["sources"])
-    fill = {"level": level}
-    invalidation = template["invalidation"].format(**fill)
-    holding = template["holding"].format(**fill)
-    rules = [{"id": i, "kind": k, "is_price_stop": False, "text": x} for i, k, x in template["exit_rules"]]
-    clause = f"STOP PLAN {template_id}: {invalidation} HOLDING: {holding}"
-    if rules:
-        clause += " EXIT RULES (not price stops): " + " ".join(f"[{r['id']}] {r['text']}" for r in rules)
+    source_ref = "; ".join(spec["sources"])
+    invalidation = spec["invalidation"].format(level=level)
+    holding = spec["holding"].format(level=level)
+    rules = [{"id": i, "kind": k, "is_price_stop": False, "text": x} for i, k, x in spec["exit_rules"]]
+    live = spec["activation"] == "INTRADAY_HARD"
+    procedure = (HARD_PROCEDURE if live else CLOSE_PROCEDURE).format(level=level)
+    clause = (f"STOP PLAN {trade_type} ({POLICY}): {invalidation} HOLDING: {holding} "
+              "EXIT RULES (not price stops): " + " ".join(f"[{r['id']}] {r['text']}" for r in rules))
     return {
         "status": "OK",
-        "template_id": template_id,
-        "selectors": {"setup": setup, "position_state": position_state, "regime": regime,
-                      "broker_mode": broker_mode},
+        "policy": POLICY,
+        "trade_type": trade_type,
         "source_ref": source_ref,
         "stop_semantics": {
-            "basis": {"kind": basis_kind, "level": level,
-                      "evidence": f"{note} | template {template_id} | source {source_ref}"},
-            "activation": template["activation"],
-            **({"broker_implementation": impl} if impl is not None else {})},
-        "live_broker_stop": template["activation"] == "INTRADAY_HARD",
+            "basis": {"kind": spec["basis_kind"], "level": level,
+                      "evidence": f"{marker(trade_type)} | {note} | source {source_ref}"},
+            "activation": spec["activation"],
+            "broker_implementation": procedure},
+        "live_broker_stop": live,
         "draft_text": {"invalidation": invalidation, "holding": holding, "trigger_text_append": clause},
         "holding_exit_rules": rules,
-        "holding_exit_rules_note": NOT_STOPS if rules else None,
+        "holding_exit_rules_note": NOT_STOPS,
     }
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:  # usage errors exit 64, never 2 (2 means BLOCKED)
+        self.print_usage(sys.stderr)
+        self.exit(64, f"{self.prog}: usage error: {message}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--list-templates", action="store_true")
-    for name in ("setup", "position-state", "regime", "template-id", "basis-kind", "basis-level",
-                 "evidence", "broker-mode", "broker-implementation"):
+    parser = _Parser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+                     allow_abbrev=False)
+    parser.add_argument("--list-trade-types", action="store_true")
+    for name in ("trade-type", "basis-level", "evidence"):
         parser.add_argument(f"--{name}")
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    if args.list_templates:
-        listing = {k: {f: v[f] for f in ("setup", "position_states", "regimes", "basis_kinds", "activation",
-                                         "broker_mode", "sources")} for k, v in TEMPLATES.items()}
-        print(json.dumps(listing, ensure_ascii=False, indent=2))
+    if args.list_trade_types:
+        if args.trade_type is not None or args.basis_level is not None or args.evidence is not None:
+            parser.error("--list-trade-types takes no other option")
+        listing = {k: {"basis_kind": v["basis_kind"], "activation": v["activation"],
+                       "broker_mode": v["broker_mode"], "sources": list(v["sources"]),
+                       "exit_rules": [r[0] for r in v["exit_rules"]]} for k, v in TRADE_TYPES.items()}
+        print(json.dumps({"policy": POLICY, "trade_types": listing}, ensure_ascii=False, indent=2))
         return 0
-    result = select(args.setup, args.position_state, args.regime, args.template_id, args.basis_kind,
-                    args.basis_level, args.evidence, args.broker_mode, args.broker_implementation)
+    result = select(args.trade_type, args.basis_level, args.evidence)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result["status"] == "OK" else 2
 

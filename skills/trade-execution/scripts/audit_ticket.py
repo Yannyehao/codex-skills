@@ -65,6 +65,20 @@ STOP_ACTIVATIONS = ("INTRADAY_HARD", "CLOSE_CONFIRM", "NEXT_SESSION_FAILURE_TO_R
 STOP_KEYS = ("basis", "activation", "reclaim_by", "broker_implementation")
 STOP_BASIS_KEYS = ("kind", "level", "evidence")
 HARD = "INTRADAY_HARD"
+# Canonical stop policy zge-stop-v1: the review's one trade type uniquely fixes basis kind and activation
+# (INTRADAY_HARD only for the brick zero-day disaster stop). Must equal market-review/scripts/stop_template.py
+# (checked by its tests). Execution audits (pre-submit, protective) BLOCK evidence without the marker; historical post-trade review never reaches it.
+STOP_POLICY = "zge-stop-v1"
+CANONICAL_STOPS = {
+    "B1_KLINE_REVERSAL": ("ENTRY_CANDLE_LOW", "CLOSE_CONFIRM"),
+    "B1_WHITE_LINE_SHORT": ("WHITE_LINE", "CLOSE_CONFIRM"),
+    "B1_YELLOW_LINE_SWING": ("YELLOW_LINE", "CLOSE_CONFIRM"),
+    "B2_FRESH_CONFIRMATION": ("PRIOR_B1_N_LOW", "CLOSE_CONFIRM"),
+    "B2_RISEN_PULLBACK": ("PRIOR_B1_N_LOW", "CLOSE_CONFIRM"),
+    "BRICK_ZERO_DAY": ("ENTRY_CANDLE_LOW", HARD),
+}
+MARKER_TYPE_RE = re.compile(r"(?<![A-Za-z0-9_])canonical_trade_type=([^\s;|]*)")
+MARKER_POLICY_RE = re.compile(r"(?<![A-Za-z0-9_])policy=([^\s;|]*)")
 # Service REVIEW_OUTCOMES, by the terminal state they are compatible with (service `outcome_candidates`).
 OUTCOME_MISSED, OUTCOME_DONE, OUTCOME_WRONG = ("机会识别成功、执行未覆盖", "机会识别成功、执行完成",
                                               "机会识别失败")
@@ -444,6 +458,27 @@ def check_veto_review(report: Report, t: dict[str, Any]) -> None:
         report.block(f"persisted veto_review vetoes {', '.join(vetoed)}: not executable")
 
 
+def check_canonical_marker(report: Report, evidence: str, kind: Any, activation: Any) -> None:
+    """Under policy zge-stop-v1 the trade type fixes basis.kind and activation; mismatch/unknown/duplicate BLOCKS."""
+    types = MARKER_TYPE_RE.findall(evidence)
+    policies = MARKER_POLICY_RE.findall(evidence)
+    if len(types) != 1 or len(policies) != 1:
+        report.block(f"stop_semantics.basis.evidence must carry exactly one canonical_trade_type=<TYPE> "
+                     f"and one policy={STOP_POLICY} marker (found {len(types)} and {len(policies)})")
+        return
+    if policies[0] != STOP_POLICY:
+        report.block(f"stop policy {policies[0]!r} is unknown; only {STOP_POLICY} is supported")
+        return
+    expected = CANONICAL_STOPS.get(types[0])
+    if expected is None:
+        report.block(f"canonical_trade_type {types[0]!r} is unknown under {STOP_POLICY}; "
+                     f"exactly one of {sorted(CANONICAL_STOPS)}")
+        return
+    if (kind, activation) != expected:
+        report.block(f"canonical_trade_type {types[0]} requires basis.kind {expected[0]} and activation "
+                     f"{expected[1]}; the ticket persists {kind!r} / {activation!r}")
+
+
 def parse_stop_semantics(report: Report, t: dict[str, Any]) -> dict[str, Any] | None:
     """Validate the persisted `review.stop_semantics`; fail closed, never fill anything in.
 
@@ -494,6 +529,8 @@ def parse_stop_semantics(report: Report, t: dict[str, Any]) -> dict[str, Any] | 
             report.block(f"{activation} needs a non-empty stop_semantics.broker_implementation")
     elif "broker_implementation" in raw and not (isinstance(broker, str) and broker.strip()):
         report.block("stop_semantics.broker_implementation must be non-empty text when present")
+    if isinstance(evidence, str):
+        check_canonical_marker(report, evidence, kind, activation)
     if level is not None and text_decimal(t["stop_trigger"]) != level:
         report.block(f"stop_semantics.basis.level {raw['basis']['level']} must equal the persisted "
                      f"stop_trigger {t['stop_trigger']} for every activation (the numeric stop is the "

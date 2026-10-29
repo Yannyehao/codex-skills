@@ -35,7 +35,7 @@ Rules:
 
 ## Stop semantics (required in every executable draft)
 
-A price is not a stop rule. Every new draft's args carry a top-level `stop_semantics`, the object below, exactly; the service stores it at `review.stop_semantics`. You do not choose, tighten, or translate it: it records the stop plan the human approved for this setup (the user's stated basis and activation, or the plan already on the ledger). If the user has not stated both a basis and an activation, ask and write nothing; do not default them from the setup name, and do not copy a number from chat that the plan does not support.
+A price is not a stop rule. Every new draft's args carry a top-level `stop_semantics`, the object below, exactly; the service stores it at `review.stop_semantics`. You do not choose, tighten, or translate it: the review's one canonical `trade_type` determines it (policy `zge-stop-v1`, [strategy-stop-playbook.md](strategy-stop-playbook.md)), the helper generates it, and the human approves the complete ticket, not its ingredients. Basis kind, activation and broker mode are never choices. If the review has not fixed a `trade_type` and the chart-derived level, ask and write nothing; do not default a type from the setup name, and do not copy a number from chat that the plan does not support.
 
 ```json
 {"basis": {"kind": "<ENTRY_CANDLE_LOW | PRIOR_B1_N_LOW | WHITE_LINE | YELLOW_LINE | KEY_K_OR_PLATFORM>",
@@ -51,18 +51,19 @@ A price is not a stop rule. Every new draft's args carry a top-level `stop_seman
 - A stop too wide for `risk_budget` is solved by a smaller `quantity` the user chooses, never by moving the level or changing the activation.
 - Without a valid `stop_semantics`, `$trade-execution` blocks every execution audit, so a draft without it is not executable. The schema is audited by `trade-execution/scripts/audit_ticket.py`; the field list is the same in [../../trade-execution/references/stop-semantics.md](../../trade-execution/references/stop-semantics.md).
 
-## Select the stop template (before `create_draft`, every executable draft)
+## Generate the canonical stop (before `create_draft`, every executable draft)
 
-Read [strategy-stop-playbook.md](strategy-stop-playbook.md). The user (or the ledger plan) states `setup`, `position_state`, `regime`, the `template_id`, `basis_kind`, the `basis_level` as decimal text, the chart `evidence`, `broker_mode`, and `broker_implementation` (required for `CLOSE_CONFIRM` and `NEXT_SESSION_FAILURE_TO_RECLAIM`, optional for `INTRADAY_HARD`, never empty when given); `basis_level` must be the same decimal as the plan's `stop_trigger`. If any other is missing, ask and write nothing; never pick a template or level from the setup name, and never calculate the level. Then run the pure helper (no writes; it reads nothing):
+Read [strategy-stop-playbook.md](strategy-stop-playbook.md). The review selects exactly one canonical `trade_type` (`B1_KLINE_REVERSAL`, `B1_WHITE_LINE_SHORT`, `B1_YELLOW_LINE_SWING`, `B2_FRESH_CONFIRMATION`, `B2_RISEN_PULLBACK`, `BRICK_ZERO_DAY`; `--list-trade-types` prints them) and records why. If two theses apply, choose the primary one and record why; there is no combined type, no `COMPOSITE`, and no execution-time choice. The only other inputs are the chart-derived `basis_level` as decimal text, which must be the same decimal as the plan's `stop_trigger`, and the chart `evidence`. If either is missing, ask and write nothing; never pick a type or level from the setup name, and never calculate the level. Regime and position state are not inputs; regime affects eligibility and size elsewhere, never the stop. Then run the pure helper (no writes; it reads nothing):
 
 ```powershell
-& <python> -X utf8 scripts\stop_template.py --setup B2 --position-state FRESH_UNFLOWN --regime TIGHT --template-id <template_id> --basis-kind <kind> --basis-level <decimal text> --evidence "<chart reading>" --broker-mode <mode> --broker-implementation "<human text>"
+& <python> -X utf8 scripts\stop_template.py --trade-type <TYPE> --basis-level <decimal text> --evidence "<chart reading>"
 ```
 
-- Exit `2` / `BLOCKED` means an unsupported or contradictory combination: report its errors, ask the user, write nothing.
+- The helper derives basis kind, activation, broker mode and `broker_implementation`, and writes the marker `canonical_trade_type=<TYPE>; policy=zge-stop-v1` at the start of `basis.evidence`. Old selector options (`--setup`, `--position-state`, `--regime`, `--template-id`, `--basis-kind`, `--broker-mode`, `--broker-implementation`) are usage errors (exit `64`).
+- Exit `2` / `BLOCKED` means an unknown type or an unusable level or evidence: report its errors, ask the user, write nothing.
 - On `OK`, pass `stop_semantics` unchanged as the top-level `stop_semantics` argument (stored as `review.stop_semantics`). Append `draft_text.trigger_text_append` to the args `trigger_text` (it carries the deterministic invalidation and holding guidance), and report `draft_text.invalidation` against the plan's invalidation; if the plan's differs, say so and stop rather than editing the plan.
-- `holding_exit_rules` (brick state/time exits) are not prices: keep them in `trigger_text`, never in `stop_trigger` / `stop_limit`. For every activation, `stop_trigger` must equal `basis.level`. The helper never emits `reclaim_by` (no template uses `NEXT_SESSION_FAILURE_TO_RECLAIM`).
-- `$trade-execution` only audits what is persisted; it never selects a template.
+- `holding_exit_rules` (time/state exits, including `PROFIT_TO_LOSS_INTRADAY`) are not prices: keep them in `trigger_text`, never in `stop_trigger` / `stop_limit`. For every activation, `stop_trigger` must equal `basis.level`. A `CLOSE_CONFIRM` type never gets a live broker stop; only `BRICK_ZERO_DAY` is `INTRADAY_HARD`. The helper never emits `reclaim_by`.
+- The human approves the complete ticket (terms hash), not the ingredients. `$trade-execution` only audits what is persisted (the marker must match `basis.kind` and `activation`); it never selects a type.
 
 ## Command and args
 
@@ -77,8 +78,9 @@ Args file (keyword arguments of the service's `create_draft_from_plan`; temp fil
  "thesis": "...", "entry_planned": "100.00", "targets": [{"price": "110.00"}], "stop_limit": "94.50",
  "stop_trigger": "95.00", "stop_kind": "stop_limit", "trigger_text": "...", "expiry_date": "20261028",
  "capital_budget": "10000.00", "quantity": 100, "fee_estimate": "0.00", "review_dimensions": {},
- "stop_semantics": {"basis": {"kind": "PRIOR_B1_N_LOW", "level": "95.00", "evidence": "<from this review>"},
-                    "activation": "INTRADAY_HARD", "broker_implementation": "<human-stated>"},
+ "stop_semantics": {"basis": {"kind": "PRIOR_B1_N_LOW", "level": "95.00",
+                              "evidence": "canonical_trade_type=B2_RISEN_PULLBACK; policy=zge-stop-v1 | <helper output, unchanged>"},
+                    "activation": "CLOSE_CONFIRM", "broker_implementation": "<helper output, unchanged>"},
  "setup_quality": "VALID", "decision_lane": "PRACTICE", "capital_stage": "PRACTICE",
  "risk_budget": "550.00", "min_reward_risk": "<account policy value>",
  "created_by": "review:NAME", "created_at": "2026-10-27T18:00:00-04:00", "idempotency_key": "<stable key>"}

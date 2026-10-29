@@ -50,8 +50,8 @@ A_PROFILE = {
 
 def stop_semantics(**overrides: object) -> dict:
     """Valid persisted `review.stop_semantics`; INTRADAY_HARD at the ticket's 95.00 stop_trigger."""
-    base = {"basis": {"kind": "PRIOR_B1_N_LOW", "level": "95.00",
-                      "evidence": "below the prior N low named in the thesis"},
+    base = {"basis": {"kind": "ENTRY_CANDLE_LOW", "level": "95.00",
+                      "evidence": "canonical_trade_type=BRICK_ZERO_DAY; policy=zge-stop-v1 | entry candle low"},
             "activation": "INTRADAY_HARD",
             "broker_implementation": "sell stop-limit 95.00/94.50 after the entry fill"}
     base.update(overrides)
@@ -151,7 +151,8 @@ def a_share(**overrides: object) -> dict:
     fields.update(overrides)
     t = ticket(**fields)
     t["review"]["stop_semantics"] = stop_semantics(
-        basis={"kind": "WHITE_LINE", "level": fields["stop_trigger"], "evidence": "white line per thesis"})
+        basis={"kind": "ENTRY_CANDLE_LOW", "level": fields["stop_trigger"],
+               "evidence": "canonical_trade_type=BRICK_ZERO_DAY; policy=zge-stop-v1 | entry candle low"})
     return t
 
 
@@ -480,11 +481,71 @@ def open_position(**overrides: object) -> dict:
 class StopSemantics(Blocks):
     CONFIRM = dict(activation="CLOSE_CONFIRM",
                    basis={"kind": "ENTRY_CANDLE_LOW", "level": "95.00",
-                          "evidence": "buy candle low from the thesis"},
+                          "evidence": "canonical_trade_type=B1_KLINE_REVERSAL; policy=zge-stop-v1 | buy candle low"},
                    broker_implementation="close alert at 95.00; after the close, sell manually")
     RECLAIM = dict(activation="NEXT_SESSION_FAILURE_TO_RECLAIM", reclaim_by="next session 10:00",
-                   basis={"kind": "WHITE_LINE", "level": "95.00", "evidence": "white line"},
+                   basis={"kind": "WHITE_LINE", "level": "95.00", "evidence": "canonical_trade_type=B1_WHITE_LINE_SHORT; policy=zge-stop-v1 | white line"},
                    broker_implementation="check at 10:00; if not reclaimed, sell manually")
+
+    CANONICAL = {"B1_KLINE_REVERSAL": ("ENTRY_CANDLE_LOW", "CLOSE_CONFIRM"),
+                 "B1_WHITE_LINE_SHORT": ("WHITE_LINE", "CLOSE_CONFIRM"),
+                 "B1_YELLOW_LINE_SWING": ("YELLOW_LINE", "CLOSE_CONFIRM"),
+                 "B2_FRESH_CONFIRMATION": ("PRIOR_B1_N_LOW", "CLOSE_CONFIRM"),
+                 "B2_RISEN_PULLBACK": ("PRIOR_B1_N_LOW", "CLOSE_CONFIRM"),
+                 "BRICK_ZERO_DAY": ("ENTRY_CANDLE_LOW", "INTRADAY_HARD")}
+
+    @staticmethod
+    def marked(trade_type, kind, activation, evidence=None):
+        mark = evidence if evidence is not None else f"canonical_trade_type={trade_type}; policy=zge-stop-v1 | chart"
+        return stop_semantics(basis={"kind": kind, "level": "95.00", "evidence": mark}, activation=activation,
+                              broker_implementation="human procedure")
+
+    def test_canonical_marker_accepts_only_the_unique_mapping(self) -> None:
+        self.assertEqual(audit.CANONICAL_STOPS, self.CANONICAL)
+        for trade_type, (kind, activation) in self.CANONICAL.items():
+            self.assertEqual(check(with_stop(ticket(), self.marked(trade_type, kind, activation)))["blockers"], [])
+            for other_kind in audit.STOP_BASIS_KINDS:
+                if other_kind != kind:
+                    self.assert_blocked(check(with_stop(ticket(), self.marked(trade_type, other_kind, activation))),
+                                        "requires basis.kind")
+            for other in ("INTRADAY_HARD", "CLOSE_CONFIRM"):
+                if other != activation:
+                    self.assert_blocked(check(with_stop(ticket(), self.marked(trade_type, kind, other))),
+                                        "requires basis.kind")
+
+    def test_canonical_marker_unknown_duplicate_or_partial_blocks(self) -> None:
+        ok = "canonical_trade_type=B2_RISEN_PULLBACK; policy=zge-stop-v1 | chart"
+        kind, act = "PRIOR_B1_N_LOW", "CLOSE_CONFIRM"
+        for bad, fragment in (
+                (ok.replace("B2_RISEN_PULLBACK", "B2"), "unknown under zge-stop-v1"),
+                (ok.replace("B2_RISEN_PULLBACK", "COMPOSITE"), "unknown under zge-stop-v1"),
+                (ok.replace("B2_RISEN_PULLBACK", ""), "unknown under zge-stop-v1"),
+                (ok.replace("zge-stop-v1", "zge-stop-v2"), "is unknown; only zge-stop-v1"),
+                (ok + " canonical_trade_type=B2_RISEN_PULLBACK", "exactly one"),
+                (ok + " canonical_trade_type=B1_KLINE_REVERSAL", "exactly one"),
+                (ok + " policy=zge-stop-v1", "exactly one"),
+                ("canonical_trade_type=B2_RISEN_PULLBACK | chart", "exactly one"),
+                ("policy=zge-stop-v1 | chart", "exactly one")):
+            self.assert_blocked(check(with_stop(ticket(), self.marked(None, kind, act, bad))), fragment)
+        self.assertEqual(check(with_stop(ticket(), self.marked(None, kind, act, ok)))["blockers"], [])
+
+    def test_unmarked_evidence_blocks_every_execution_audit(self) -> None:
+        for kind, activation in (("WHITE_LINE", "CLOSE_CONFIRM"), ("ENTRY_CANDLE_LOW", "INTRADAY_HARD")):
+            sem = self.marked(None, kind, activation, "hand-written chart reading")
+            self.assert_blocked(check(with_stop(ticket(), sem)), "exactly one canonical_trade_type")
+            self.assert_blocked(check(with_stop(a_share(), sem)), "exactly one canonical_trade_type")
+            result = audit.protective(with_stop(open_position(), sem), AUDIT_OK, "95.00", "94.50", "100")
+            self.assert_blocked(result, "exactly one canonical_trade_type")
+
+    def test_next_session_failure_activation_has_no_canonical_type(self) -> None:
+        result = check(with_stop(ticket(), stop_semantics(**self.RECLAIM)))
+        self.assert_blocked(result, "requires basis.kind")
+        self.assertTrue(all("requires basis.kind" in b for b in result["blockers"]), result["blockers"])
+
+    def test_marker_does_not_relax_the_stop_trigger_equality(self) -> None:
+        sem = self.marked("BRICK_ZERO_DAY", "ENTRY_CANDLE_LOW", "INTRADAY_HARD")
+        sem["basis"]["level"] = "95.50"
+        self.assert_blocked(check(with_stop(ticket(), sem)), "must equal the persisted stop_trigger")
 
     def test_missing_stop_semantics_blocks_every_execution_audit(self) -> None:
         self.assert_blocked(check(with_stop(ticket(), None)), "review.stop_semantics is missing")
@@ -541,7 +602,7 @@ class StopSemantics(Blocks):
         self.assertNotIn("human_only_stop_plan", result)
 
     def test_non_hard_pre_submit_renders_no_live_stop_only_a_human_procedure(self) -> None:
-        for extra in (self.CONFIRM, self.RECLAIM):
+        for extra in (self.CONFIRM,):
             result = check(with_stop(ticket(), stop_semantics(**extra)))
             self.assertEqual(result["blockers"], [])
             self.assertEqual(result["verdict"], "READY_FOR_HUMAN_CONFIRMATION")
@@ -563,7 +624,6 @@ class StopSemantics(Blocks):
         del no_key["reclaim_by"]
         self.assert_blocked(check(with_stop(ticket(), no_key)), "reclaim_by")
         self.assertEqual(check(with_stop(ticket(), stop_semantics(**self.CONFIRM)))["blockers"], [])
-        self.assertEqual(check(with_stop(ticket(), stop_semantics(**self.RECLAIM)))["blockers"], [])
 
     def test_reclaim_by_is_allowed_only_for_next_session_failure_to_reclaim(self) -> None:
         for base in (stop_semantics(), stop_semantics(**self.CONFIRM)):
@@ -573,16 +633,23 @@ class StopSemantics(Blocks):
 
     def test_basis_level_must_equal_stop_trigger_for_every_activation(self) -> None:
         for base in (stop_semantics(), stop_semantics(**self.CONFIRM), stop_semantics(**self.RECLAIM)):
-            self.assertEqual(check(with_stop(ticket(), base))["blockers"], [], base["activation"])
+            canonical = base["activation"] != "NEXT_SESSION_FAILURE_TO_RECLAIM"
+            if canonical:
+                self.assertEqual(check(with_stop(ticket(), base))["blockers"], [], base["activation"])
             for other in ("95.50", "94.99", "96.00"):
                 sem = {**base, "basis": {**base["basis"], "level": other}}
                 self.assert_blocked(check(with_stop(ticket(), sem)),
                                     "must equal the persisted stop_trigger 95.00 for every activation")
             same_value = {**base, "basis": {**base["basis"], "level": "95.0000"}}
-            self.assertEqual(check(with_stop(ticket(), same_value))["blockers"], [], base["activation"])
+            if canonical:
+                self.assertEqual(check(with_stop(ticket(), same_value))["blockers"], [], base["activation"])
 
     def test_protective_blocks_when_activation_is_not_intraday_hard(self) -> None:
-        for extra in (self.CONFIRM, self.RECLAIM):
+        reclaim = audit.protective(with_stop(open_position(), stop_semantics(**self.RECLAIM)),
+                                   AUDIT_OK, "95.00", "94.50", "100")
+        self.assert_blocked(reclaim, "requires basis.kind")
+        self.assertNotIn("protective_order", reclaim)
+        for extra in (self.CONFIRM,):
             t = with_stop(open_position(), stop_semantics(**extra))
             result = audit.protective(t, AUDIT_OK, "95.00", "94.50", "100")
             self.assert_blocked(result, "not INTRADAY_HARD")

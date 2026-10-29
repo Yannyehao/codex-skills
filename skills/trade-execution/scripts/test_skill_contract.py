@@ -170,7 +170,17 @@ class StopSemanticsContract(unittest.TestCase):
             self.assertNotIn("MSFT", text)
             self.assertNotIn("527", text)
             self.assertNotIn("532", text)
-        self.assertIn("never as defaults to apply", self.stop)
+        self.assertIn("never selects or re-runs a trade type", self.stop)
+
+    def test_canonical_marker_is_documented_with_the_exact_mapping(self) -> None:
+        self.assertIn("canonical_trade_type=<TYPE>; policy=zge-stop-v1", self.stop)
+        self.assertIn("canonical_trade_type=<TYPE>; policy=zge-stop-v1", self.skill)
+        for trade_type, (kind, activation) in audit.CANONICAL_STOPS.items():
+            self.assertIn(f"| `{trade_type}` | `{kind}` | `{activation}` |", self.stop)
+        self.assertIn("Only `BRICK_ZERO_DAY` is `INTRADAY_HARD`", self.skill)
+        self.assertIn("historical post-trade review is unchanged", self.stop)
+        self.assertIn("a missing marker BLOCKS execution", self.stop)
+        self.assertNotIn("legacy", (self.stop + self.skill).lower())
 
 
 class PostTradeReviewScope(unittest.TestCase):

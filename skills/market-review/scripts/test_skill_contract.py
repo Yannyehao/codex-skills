@@ -119,13 +119,13 @@ class StopSemanticsDraftContract(unittest.TestCase):
         self.assertIn("ONLY for NEXT_SESSION_FAILURE_TO_RECLAIM, where it is required", self.draft)
         self.assertIn("`stop_semantics` is a top-level keyword argument of `create_draft_from_plan`", self.draft)
         self.assertIn("never pass a caller-built `review` object", self.draft)
-        self.assertIn("Every new draft's args must carry the human-approved top-level `stop_semantics`", self.skill)
+        self.assertIn("Every new draft's args must carry the top-level `stop_semantics`", self.skill)
 
     def test_broker_implementation_rule_and_source_status_wording(self) -> None:
         self.assertIn("required for CLOSE_CONFIRM and NEXT_SESSION_FAILURE_TO_RECLAIM, optional for "
                       "INTRADAY_HARD but non-empty if present", self.draft)
         playbook = (MR / "references" / "strategy-stop-playbook.md").read_text(encoding="utf-8")
-        self.assertIn("optional for `INTRADAY_HARD`, but never empty when given", playbook)
+        self.assertIn("`INTRADAY_HARD`: used only by `BRICK_ZERO_DAY`", playbook)
         self.assertIn("locally verified outside this public repository", playbook)
         self.assertIn("portable date and section anchors", playbook)
         self.assertNotIn("owner's instruction", playbook)
@@ -133,9 +133,10 @@ class StopSemanticsDraftContract(unittest.TestCase):
 
     def test_review_persists_the_human_plan_and_never_invents_it(self) -> None:
         for phrase in ("You do not choose, tighten, or translate it",
-                       "the stop plan the human approved",
-                       "If the user has not stated both a basis and an activation, ask and write nothing",
-                       "do not default them from the setup name",
+                       "the review's one canonical `trade_type` determines it",
+                       "the human approves the complete ticket, not its ingredients",
+                       "Basis kind, activation and broker mode are never choices",
+                       "ask and write nothing; do not default a type from the setup name",
                        "never by moving the level or changing the activation"):
             self.assertIn(phrase, self.draft)
         self.assertIn("you persist it and never invent it", self.skill)
@@ -178,10 +179,13 @@ class StopTemplateWorkflow(unittest.TestCase):
             self.assertIn("stop_template.py", text)
             self.assertIn("strategy-stop-playbook.md", text)
         for phrase in ("ask and write nothing", "never calculate the level", "trigger_text_append",
-                       "never in `stop_trigger` / `stop_limit`", "never selects a template"):
+                       "never in `stop_trigger` / `stop_limit`", "never selects a type",
+                       "canonical_trade_type=<TYPE>; policy=zge-stop-v1", "no combined type",
+                       "--trade-type", "Regime and position state are not inputs"):
             self.assertIn(phrase, draft)
-        self.assertIn("there is no default template", skill)
-        self.assertIn("never selects or re-runs a template",
+        self.assertIn("no default trade type and no combined stop", skill)
+        self.assertIn("The human approves the complete ticket, not its ingredients", skill)
+        self.assertIn("never selects or re-runs a trade type",
                       read(SKILLS / "trade-execution" / "references" / "stop-semantics.md"))
 
 
