@@ -38,7 +38,8 @@ class Templates(unittest.TestCase):
         self.assertEqual(sorted(st.TEMPLATES), sorted([
             "B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM", "B1_FRESH_ENTRY_LOW_INTRADAY_HARD",
             "B1_FLOWN_N_LOW_WHITE_LINE_CLOSE_CONFIRM", "B1_FLOWN_YELLOW_LINE_CLOSE_CONFIRM",
-            "B2_YELLOW_LINE_CLOSE_CONFIRM", "B2_STRUCTURAL_PRIOR_LOW_CLOSE_CONFIRM",
+            "B2_YELLOW_LINE_CLOSE_CONFIRM", "B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM",
+            "B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM",
             "B2_TIGHT_ENTRY_LOW_INTRADAY_HARD", "B2_KEY_K_PLATFORM_CLOSE_CONFIRM",
             "BRICK_FRESH_FAILURE_DISASTER", "BRICK_MATURE_DISASTER"]))
         for template_id in st.TEMPLATES:
@@ -69,8 +70,15 @@ class Templates(unittest.TestCase):
         self.assertEqual(run("B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM", state="FLOWN")["status"], "BLOCKED")
         for regime in st.REGIMES:  # B1 is preferred in TIGHT; the normal close-confirm stop fits both
             self.assertEqual(run("B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM", regime=regime)["status"], "OK")
-            self.assertEqual(run("B1_FRESH_ENTRY_LOW_INTRADAY_HARD", regime=regime)["status"], "OK")
-        self.assertEqual(run("B2_STRUCTURAL_PRIOR_LOW_CLOSE_CONFIRM", regime="TIGHT")["status"], "BLOCKED")
+        # the hand-tight B1 override is sourced for TIGHT only and is never selectable in LOOSE
+        self.assertEqual(run("B1_FRESH_ENTRY_LOW_INTRADAY_HARD", regime="TIGHT")["status"], "OK")
+        loose = run("B1_FRESH_ENTRY_LOW_INTRADAY_HARD", regime="LOOSE")
+        self.assertEqual(loose["status"], "BLOCKED")
+        self.assertNotIn("stop_semantics", loose)
+        self.assertIn("does not allow regime LOOSE", " ".join(loose["errors"]))
+        self.assertEqual(st.TEMPLATES["B1_FRESH_ENTRY_LOW_INTRADAY_HARD"]["regimes"], ("TIGHT",))
+        for template_id in ("B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM", "B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM"):
+            self.assertEqual(run(template_id, regime="TIGHT")["status"], "BLOCKED")
         self.assertEqual(run("B2_YELLOW_LINE_CLOSE_CONFIRM", regime="TIGHT")["status"], "BLOCKED")
         self.assertEqual(run("B1_FLOWN_YELLOW_LINE_CLOSE_CONFIRM", state="FRESH_UNFLOWN")["status"], "BLOCKED")
         self.assertEqual(run("B2_YELLOW_LINE_CLOSE_CONFIRM", state="FLOWN")["status"], "BLOCKED")
@@ -83,7 +91,33 @@ class Templates(unittest.TestCase):
             self.assertIn("2025-12-03", out["source_ref"])
             self.assertIn("2026-01-21", out["source_ref"])
         self.assertEqual(run("B2_TIGHT_ENTRY_LOW_INTRADAY_HARD", regime="LOOSE")["status"], "BLOCKED")
-        self.assertEqual(run("B2_STRUCTURAL_PRIOR_LOW_CLOSE_CONFIRM", state="ALREADY_RISEN")["status"], "OK")
+
+    def test_b2_prior_low_is_split_by_position_state(self) -> None:
+        fresh_id, risen_id = "B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM", "B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM"
+        self.assertEqual(run(fresh_id, state="FRESH_UNFLOWN")["status"], "OK")
+        self.assertEqual(run(fresh_id, state="ALREADY_RISEN")["status"], "BLOCKED")
+        self.assertEqual(run(risen_id, state="ALREADY_RISEN")["status"], "OK")
+        self.assertEqual(run(risen_id, state="FRESH_UNFLOWN")["status"], "BLOCKED")
+        fresh, risen = run(fresh_id), run(risen_id)
+        for out in (fresh, risen):
+            self.assertEqual(out["stop_semantics"]["basis"]["kind"], "PRIOR_B1_N_LOW")
+            self.assertEqual(out["stop_semantics"]["activation"], "CLOSE_CONFIRM")
+            self.assertEqual(out["holding_exit_rules"], [])
+        # fresh carries the two-session failure-to-explode clock; the risen pullback must not inherit it
+        fresh_text = " ".join(fresh["draft_text"].values())
+        self.assertIn("two-session failure-to-explode clock", fresh_text)
+        self.assertIn("2025-10-06", fresh["source_ref"])
+        risen_text = " ".join(risen["draft_text"].values())
+        self.assertIn("does not apply to an already-risen B2 pullback", risen_text)
+        self.assertIn("prior B1/N low", risen_text)
+        self.assertIn("no-S1", risen_text)
+        self.assertNotIn("two-session rule", risen_text)
+        self.assertNotIn("two-session rule", risen["source_ref"])
+        self.assertIn("2026-01-21", risen["source_ref"])
+        # the other shared B2 templates never mention the fresh-entry clock
+        for template_id in ("B2_KEY_K_PLATFORM_CLOSE_CONFIRM", "B2_YELLOW_LINE_CLOSE_CONFIRM"):
+            text = " ".join(run(template_id, state="ALREADY_RISEN")["draft_text"].values())
+            self.assertNotIn("two-session", text)
 
     def test_cross_setup_template_blocks(self) -> None:
         self.assertEqual(run("B2_KEY_K_PLATFORM_CLOSE_CONFIRM", setup="B1")["status"], "BLOCKED")
@@ -142,7 +176,8 @@ class NoDefaults(unittest.TestCase):
 
     def test_unsupported_basis_kind_blocks(self) -> None:
         self.assertEqual(run("B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM", kind="YELLOW_LINE")["status"], "BLOCKED")
-        self.assertEqual(run("B2_STRUCTURAL_PRIOR_LOW_CLOSE_CONFIRM", kind="YELLOW_LINE")["status"], "BLOCKED")
+        for template_id in ("B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM", "B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM"):
+            self.assertEqual(run(template_id, kind="YELLOW_LINE")["status"], "BLOCKED")
         self.assertEqual(run("B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM", kind="NOPE")["status"], "BLOCKED")
 
 
@@ -172,6 +207,44 @@ class AuditorVocabulary(unittest.TestCase):
             report = auditor.Report()
             self.assertIsNotNone(auditor.parse_stop_semantics(report, ticket), template_id)
             self.assertEqual(report.blockers, [])
+
+
+class ServiceContractMismatch(unittest.TestCase):
+    """The helper's fragment must be accepted only by the exact lifecycle-service contract."""
+
+    @staticmethod
+    def audited(ss, stop_trigger="12.3400"):
+        report = auditor.Report()
+        parsed = auditor.parse_stop_semantics(report, {"review": {"stop_semantics": ss}, "stop_trigger": stop_trigger})
+        return parsed, report.blockers
+
+    def test_basis_level_must_equal_stop_trigger_for_every_activation(self) -> None:
+        for template_id in st.TEMPLATES:
+            ss = run(template_id)["stop_semantics"]
+            self.assertIsNotNone(self.audited(ss)[0], template_id)
+            self.assertIsNotNone(self.audited(ss, "12.34")[0], template_id)  # same decimal value
+            parsed, blockers = self.audited(ss, "12.3500")
+            self.assertIsNone(parsed, template_id)
+            self.assertTrue(any("must equal the persisted stop_trigger" in b for b in blockers), template_id)
+
+    def test_reclaim_by_is_rejected_on_every_template_activation(self) -> None:
+        for template_id in st.TEMPLATES:
+            ss = run(template_id)["stop_semantics"]
+            self.assertNotIn("reclaim_by", ss)
+            for value in ("next session 10:00", None, ""):
+                parsed, blockers = self.audited({**ss, "reclaim_by": value})
+                self.assertIsNone(parsed, (template_id, value))
+                self.assertTrue(any("reclaim_by is allowed only for NEXT_SESSION_FAILURE_TO_RECLAIM" in b
+                                    for b in blockers), template_id)
+
+    def test_missing_broker_implementation_and_unknown_keys_fail(self) -> None:
+        for template_id, t in st.TEMPLATES.items():
+            ss = run(template_id)["stop_semantics"]
+            parsed, blockers = self.audited({**ss, "extra": "x"})
+            self.assertIsNone(parsed, template_id)
+            self.assertTrue(any("unsupported keys" in b for b in blockers), template_id)
+            bare = {k: v for k, v in ss.items() if k != "broker_implementation"}
+            self.assertEqual(self.audited(bare)[0] is not None, t["activation"] == "INTRADAY_HARD", template_id)
 
 
 class BrickSeparation(unittest.TestCase):
@@ -216,7 +289,8 @@ class SourceRefAndText(unittest.TestCase):
             self.assertIn(out["source_ref"], out["stop_semantics"]["basis"]["evidence"])
             self.assertIsNone(MACHINE_PATH.search(json.dumps(out)))
             self.assertIn("2026-04-22", out["source_ref"])
-        anchors = {"B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM": "2025-11-12", "B2_STRUCTURAL_PRIOR_LOW_CLOSE_CONFIRM": "2025-10-06",
+        anchors = {"B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM": "2025-11-12", "B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM": "2025-10-06",
+                   "B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM": "2026-01-21",
                    "B2_TIGHT_ENTRY_LOW_INTRADAY_HARD": "2026-01-14", "BRICK_MATURE_DISASTER": "2026-03-18"}
         for template_id, date in anchors.items():
             self.assertIn(date, run(template_id)["source_ref"])

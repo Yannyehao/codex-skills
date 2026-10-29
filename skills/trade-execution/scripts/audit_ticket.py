@@ -485,17 +485,19 @@ def parse_stop_semantics(report: Report, t: dict[str, Any]) -> dict[str, Any] | 
     if activation == "NEXT_SESSION_FAILURE_TO_RECLAIM":
         if not (isinstance(reclaim, str) and reclaim.strip()):
             report.block("NEXT_SESSION_FAILURE_TO_RECLAIM needs a non-empty stop_semantics.reclaim_by")
-    elif reclaim is not None and not (isinstance(reclaim, str) and reclaim.strip()):
-        report.block("stop_semantics.reclaim_by must be non-empty text when present")
+    elif "reclaim_by" in raw:
+        report.block("stop_semantics.reclaim_by is allowed only for NEXT_SESSION_FAILURE_TO_RECLAIM "
+                     f"(activation is {activation!r}); omit the key, a null value is still rejected")
     broker = raw.get("broker_implementation")
     if activation in STOP_ACTIVATIONS and activation != HARD:
         if not (isinstance(broker, str) and broker.strip()):
             report.block(f"{activation} needs a non-empty stop_semantics.broker_implementation")
     elif "broker_implementation" in raw and not (isinstance(broker, str) and broker.strip()):
         report.block("stop_semantics.broker_implementation must be non-empty text when present")
-    if activation == HARD and level is not None and text_decimal(t["stop_trigger"]) != level:
-        report.block(f"INTRADAY_HARD needs the persisted stop_trigger {t['stop_trigger']} to equal "
-                     f"stop_semantics.basis.level {raw['basis']['level']}")
+    if level is not None and text_decimal(t["stop_trigger"]) != level:
+        report.block(f"stop_semantics.basis.level {raw['basis']['level']} must equal the persisted "
+                     f"stop_trigger {t['stop_trigger']} for every activation (the numeric stop is the "
+                     "reference level of the stated basis)")
     if len(report.blockers) != before:
         return None
     return {"activation": activation, "kind": kind, "level": level, "evidence": evidence.strip(),
@@ -940,8 +942,13 @@ def historical_post_trade_review(state: Any, service_audit: Any, args: Any) -> d
     if state.get("journal_state", current) != current:
         report.block(f"state journal says {state.get('journal_state')} but facts derive {current}")
     if not (isinstance(service_audit, dict) and service_audit.get("available") is True
-            and service_audit.get("ok") is True and service_audit.get("issues") == []):
-        report.block("lifecycle service audit is missing or not clean")
+            and service_audit.get("ok") is True and service_audit.get("issues") == []
+            and type(service_audit.get("historical_trades")) is int
+            and service_audit["historical_trades"] == 1
+            and type(service_audit.get("tickets")) is int and service_audit["tickets"] == 0):
+        report.block("lifecycle service audit is missing, not clean, or not scoped to exactly this "
+                     "historical trade (needs available=true, ok=true, issues=[], historical_trades == 1, "
+                     "tickets == 0; an all-database or unscoped audit is rejected)")
     if not isinstance(args, dict):
         report.block("args JSON must be an object of mark_historical_reviewed keyword arguments")
         return report.finish(head, ok="ARGS_OK")

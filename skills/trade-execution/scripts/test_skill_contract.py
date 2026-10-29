@@ -158,7 +158,9 @@ class StopSemanticsContract(unittest.TestCase):
                                                   "NEXT_SESSION_FAILURE_TO_RECLAIM"))
         self.assertIn("every execution audit (`pre-submit`, `protective`) returns BLOCKED", self.stop)
         self.assertIn("`basis.level` is decimal TEXT", self.stop)
-        self.assertIn("`INTRADAY_HARD` the ticket's `stop_trigger` must equal `basis.level`", self.stop)
+        self.assertIn("For every activation the ticket's `stop_trigger` must equal `basis.level`", self.stop)
+        self.assertIn("allowed only there", self.stop)
+        self.assertIn("Unknown keys BLOCK", self.stop)
         self.assertIn("`human_only_stop_plan`", self.stop)
         self.assertIn("is required on every executable ticket and validated by `audit_ticket.py`",
                       self.contract)

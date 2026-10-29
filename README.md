@@ -23,7 +23,7 @@ cd codex-skills
 
 `ste-fr` 持续保持三语模式，直到 `/stop-ste-fr`。明确批准入库时，委托 `lexicon-ingest`；没有批准就不写库。
 
-`market-review` 与 `trade-execution` 首次使用时，分别把安装目录内的 `config.example.json` 复制为 `config.local.json`，填写本机 zAI 项目、候选数据库和交易生命周期服务目标。该配置不会提交，重复安装会保留。复盘默认只读；生成交易单时必须用受控模板明确 B1 / B2 / 搬砖的止损依据和触发方式。执行 Skill 只能读取已落库并经人工批准的交易单，不代替用户操作券商，也不会把收盘确认止损翻译成盘中 STOP_LIMIT。
+`market-review` 与 `trade-execution` 首次使用时，分别把安装目录内的 `config.example.json` 复制为 `config.local.json`，填写本机 zAI 项目、候选数据库和交易生命周期服务目标。该配置不会提交，重复安装会保留。复盘默认只读；生成交易单时必须用受控模板明确 B1 / B2 / 搬砖的止损依据和触发方式，其中 B2 新入场的时间规则与已上涨回调的结构规则不得混用。执行 Skill 只能读取已落库并经人工批准的交易单，不代替用户操作券商，也不会把收盘确认止损翻译成盘中 STOP_LIMIT。
 
 `us-market-review` 只是兼容旧 `$us-market-review` 命令的显式别名，不保存复盘逻辑，也不会被“美股复盘”自动触发；普通请求统一进入 `market-review`。
 

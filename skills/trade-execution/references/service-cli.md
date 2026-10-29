@@ -84,7 +84,7 @@ Then read `state` back and report the stored state.
 A pre-system historical import (state shows `historical_import` and `pre_system_trade` true, with a `historical_id`) is reviewed only through `audit_ticket.py historical-post-trade-review --state <state.json> --service-audit <audit.json> --args-json <file>`. It prints `ARGS_OK` or `BLOCKED` and never writes.
 
 - Inputs: the unedited historical `state`, the service `audit`, and the args file.
-- Requires `historical_import` and `pre_system_trade` both true, a current `state` of exactly `CLOSED` (not `REVIEWED`), and a clean service audit.
+- Requires `historical_import` and `pre_system_trade` both true, a current `state` of exactly `CLOSED` (not `REVIEWED`), and a service audit scoped to exactly this trade: `available` true, `ok` true, `issues` empty, `historical_trades == 1` and `tickets == 0` (integers). An all-database or unscoped clean audit is rejected; obtain it with `audit --ticket-id <historical_id>`, never the whole-ledger audit.
 - Args: `historical_id` (equal to the state's), `reviewed_by` `human:<name>`, `outcome` (`机会识别成功、执行完成` or `机会识别失败`), `note` (non-empty), `occurred_at` (with a UTC offset), `idempotency_key` (non-empty), optional non-empty `annotation_id`; no other keys.
 - `outcome` and `note` are the user's explicit words; never inferred.
 - After `ARGS_OK`, run the lifecycle service `apply --op mark_historical_reviewed --args-json <file>` (it identifies the trade by `historical_id`), then the mandatory `state` readback, and report the stored state.

@@ -41,18 +41,19 @@ A price is not a stop rule. Every new draft's args carry a top-level `stop_seman
 {"basis": {"kind": "<ENTRY_CANDLE_LOW | PRIOR_B1_N_LOW | WHITE_LINE | YELLOW_LINE | KEY_K_OR_PLATFORM>",
            "level": "<decimal text, at most 4 places>", "evidence": "<why this level, from this review's chart reading and the thesis>"},
  "activation": "<INTRADAY_HARD | CLOSE_CONFIRM | NEXT_SESSION_FAILURE_TO_RECLAIM>",
- "reclaim_by": "<required for NEXT_SESSION_FAILURE_TO_RECLAIM, otherwise optional>",
+ "reclaim_by": "<ONLY for NEXT_SESSION_FAILURE_TO_RECLAIM, where it is required; omit the key for every other activation>",
  "broker_implementation": "<how the human implements it at the broker; required for CLOSE_CONFIRM and NEXT_SESSION_FAILURE_TO_RECLAIM, optional for INTRADAY_HARD but non-empty if present>"}
 ```
 
 - `basis.evidence` must be non-empty and tie `basis.level` to the thesis, trigger, or invalidation; `basis.level` is decimal text, never a JSON number.
-- `INTRADAY_HARD`: `stop_trigger` must equal `basis.level`. Any other activation keeps `stop_trigger` / `stop_limit` as the economic reference that prices the plan's risk; no live broker stop is placed at that level, and `$trade-execution` shows only the human-only procedure from the required `broker_implementation`.
+- This is the lifecycle service's exact contract. `reclaim_by` is required for, and allowed only with, `NEXT_SESSION_FAILURE_TO_RECLAIM` (any other activation that carries the key, even as null, is rejected). `broker_implementation` is required for `CLOSE_CONFIRM` and `NEXT_SESSION_FAILURE_TO_RECLAIM`, optional for `INTRADAY_HARD`, and non-empty if present. Unknown keys fail; nothing is repaired.
+- For every activation `stop_trigger` must equal `basis.level` (the numeric stop is the reference level of the stated basis, whatever the activation); a mismatch is rejected by the service and blocked by `$trade-execution`. Only `INTRADAY_HARD` makes that level a live stop-limit. Any other activation keeps `stop_trigger` / `stop_limit` as the economic reference that prices the plan's risk; no live broker stop is placed at that level, and `$trade-execution` shows only the human-only procedure from the required `broker_implementation`.
 - A stop too wide for `risk_budget` is solved by a smaller `quantity` the user chooses, never by moving the level or changing the activation.
 - Without a valid `stop_semantics`, `$trade-execution` blocks every execution audit, so a draft without it is not executable. The schema is audited by `trade-execution/scripts/audit_ticket.py`; the field list is the same in [../../trade-execution/references/stop-semantics.md](../../trade-execution/references/stop-semantics.md).
 
 ## Select the stop template (before `create_draft`, every executable draft)
 
-Read [strategy-stop-playbook.md](strategy-stop-playbook.md). The user (or the ledger plan) states `setup`, `position_state`, `regime`, the `template_id`, `basis_kind`, the `basis_level` as decimal text, the chart `evidence`, `broker_mode`, and `broker_implementation` (required for `CLOSE_CONFIRM` and `NEXT_SESSION_FAILURE_TO_RECLAIM`, optional for `INTRADAY_HARD`, never empty when given). If any other is missing, ask and write nothing; never pick a template or level from the setup name, and never calculate the level. Then run the pure helper (no writes; it reads nothing):
+Read [strategy-stop-playbook.md](strategy-stop-playbook.md). The user (or the ledger plan) states `setup`, `position_state`, `regime`, the `template_id`, `basis_kind`, the `basis_level` as decimal text, the chart `evidence`, `broker_mode`, and `broker_implementation` (required for `CLOSE_CONFIRM` and `NEXT_SESSION_FAILURE_TO_RECLAIM`, optional for `INTRADAY_HARD`, never empty when given); `basis_level` must be the same decimal as the plan's `stop_trigger`. If any other is missing, ask and write nothing; never pick a template or level from the setup name, and never calculate the level. Then run the pure helper (no writes; it reads nothing):
 
 ```powershell
 & <python> -X utf8 scripts\stop_template.py --setup B2 --position-state FRESH_UNFLOWN --regime TIGHT --template-id <template_id> --basis-kind <kind> --basis-level <decimal text> --evidence "<chart reading>" --broker-mode <mode> --broker-implementation "<human text>"
@@ -60,7 +61,7 @@ Read [strategy-stop-playbook.md](strategy-stop-playbook.md). The user (or the le
 
 - Exit `2` / `BLOCKED` means an unsupported or contradictory combination: report its errors, ask the user, write nothing.
 - On `OK`, pass `stop_semantics` unchanged as the top-level `stop_semantics` argument (stored as `review.stop_semantics`). Append `draft_text.trigger_text_append` to the args `trigger_text` (it carries the deterministic invalidation and holding guidance), and report `draft_text.invalidation` against the plan's invalidation; if the plan's differs, say so and stop rather than editing the plan.
-- `holding_exit_rules` (brick state/time exits) are not prices: keep them in `trigger_text`, never in `stop_trigger` / `stop_limit`. For `INTRADAY_HARD`, `stop_trigger` must equal `basis.level`.
+- `holding_exit_rules` (brick state/time exits) are not prices: keep them in `trigger_text`, never in `stop_trigger` / `stop_limit`. For every activation, `stop_trigger` must equal `basis.level`. The helper never emits `reclaim_by` (no template uses `NEXT_SESSION_FAILURE_TO_RECLAIM`).
 - `$trade-execution` only audits what is persisted; it never selects a template.
 
 ## Command and args

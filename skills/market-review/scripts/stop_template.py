@@ -41,6 +41,7 @@ NOT_STOPS = ("These are holding/exit rules judged by the human at the stated tim
 SRC_B1 = "2025-11-12 B1 fresh entry candle vs flown wider N/white-line"
 SRC_YELLOW = "2025-12-03 / 2026-01-21 yellow-line structural stop alternative for B1/B2"
 SRC_B2 = "2025-10-06 B2 prior B1/N low and two-session rule"
+SRC_B2_LOW = "2025-10-06 B2 prior B1/N low"
 SRC_B2_TIGHT = "2026-01-14 / 2026-01-07 B2 tight entry-low intraday variant"
 SRC_RISEN = "2026-01-21 already-risen B2 pullback rule"
 SRC_BRICK = "2026-03-18 brick next-open no-rise and red->green / four-brick rules"
@@ -64,9 +65,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
         "close if it triggers."),
     "B1_FRESH_ENTRY_LOW_INTRADAY_HARD": _t(
-        "B1", ("FRESH_UNFLOWN",), ("TIGHT", "LOOSE"), ("ENTRY_CANDLE_LOW",), "INTRADAY_HARD",
+        "B1", ("FRESH_UNFLOWN",), ("TIGHT",), ("ENTRY_CANDLE_LOW",), "INTRADAY_HARD",
         "LIVE_STOP_LIMIT", (SRC_B1, SRC_REGIME, SRC_META),
-        "Explicit hand-tight override (not the normal B1 stop): fresh B1 is invalidated by any trade through the entry-candle "
+        "Explicit hand-tight override (TIGHT regime only; not the normal B1 stop): fresh B1 is invalidated by any trade through the entry-candle "
         "low {level}. " + HARD_RULE,
         "Hold only while price stays above {level} intraday; the live stop-limit does the exit."),
     "B1_FLOWN_N_LOW_WHITE_LINE_CLOSE_CONFIRM": _t(
@@ -84,13 +85,20 @@ TEMPLATES: dict[str, dict[str, Any]] = {
         "template, chosen by the human, never a default. " + CLOSE_RULE,
         "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
         "close if it triggers."),
-    "B2_STRUCTURAL_PRIOR_LOW_CLOSE_CONFIRM": _t(
-        "B2", ("FRESH_UNFLOWN", "ALREADY_RISEN"), ("LOOSE",), ("PRIOR_B1_N_LOW",), "CLOSE_CONFIRM",
-        "HUMAN_ONLY_ALERT", (SRC_B2, SRC_RISEN, SRC_REGIME, SRC_META),
-        "B2 structural stop at the prior B1/N low {level}. " + CLOSE_RULE
-        + " Apply the two-session rule of the cited course date as the human has confirmed it.",
+    "B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM": _t(
+        "B2", ("FRESH_UNFLOWN",), ("LOOSE",), ("PRIOR_B1_N_LOW",), "CLOSE_CONFIRM",
+        "HUMAN_ONLY_ALERT", (SRC_B2, SRC_REGIME, SRC_META),
+        "Fresh B2 structural stop at the prior B1/N low {level}. " + CLOSE_RULE,
         "Hold while closes stay at or above {level}; set a close-based alert and exit manually after the "
-        "close if it triggers."),
+        "close if it triggers. A fresh B2 entry also carries the two-session failure-to-explode clock: "
+        "apply the two-session rule of the cited course date as the human has confirmed it."),
+    "B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM": _t(
+        "B2", ("ALREADY_RISEN",), ("LOOSE",), ("PRIOR_B1_N_LOW",), "CLOSE_CONFIRM",
+        "HUMAN_ONLY_ALERT", (SRC_B2_LOW, SRC_RISEN, SRC_REGIME, SRC_META),
+        "Already-risen B2 pullback structural stop at the prior B1/N low {level}. " + CLOSE_RULE,
+        "Hold while closes stay at or above {level} and the human-stated no-S1 context still holds; set a "
+        "close-based alert and exit manually after the close if it triggers. The fresh-entry two-session "
+        "failure-to-explode exit does not apply to an already-risen B2 pullback."),
     "B2_TIGHT_ENTRY_LOW_INTRADAY_HARD": _t(
         "B2", ("FRESH_UNFLOWN",), ("TIGHT",), ("ENTRY_CANDLE_LOW",), "INTRADAY_HARD", "LIVE_STOP_LIMIT",
         (SRC_B2_TIGHT, SRC_REGIME, SRC_META),

@@ -5,7 +5,8 @@
 - 搬砖的次日不爆发、红转绿和四红砖等状态/时间退出与价格灾难止损分开保存；B1/B2 的盘中硬止损、收盘确认及次日收不回分别建模，避免执行端擅自改语义。
 - `trade-execution` 在展示或挂保护单前确定性校验 `review.stop_semantics`；只有 `INTRADAY_HARD` 能生成实时 STOP_LIMIT，收盘确认只给人工监控/退出流程。
 - 新增普通交易和历史导入交易两条独立的事后复盘门禁；MSFT 这类上线前成交使用 `mark_historical_reviewed`，保留原成交与错误委托，不事后篡改原计划。
-- market-review 58 项、trade-execution 115 项契约测试通过；两项 Skill 均通过 skill-creator 快速校验。
+- fresh-context 审计后修正四处跨层契约：B1 盘中硬止损仅限手紧模式；B2 新入场“两日不爆发”与已上涨回调拆成独立模板；Skill 的字段/价位约束与底层服务完全一致；历史复盘只接受恰好一笔历史交易的定向审计。
+- market-review 63 项、trade-execution 118 项契约测试通过；两项 Skill 均通过 skill-creator 快速校验。
 
 ## 2026-10-27 · 复盘与执行 Skill 正式回收源仓库
 - 将本机已验证的 `market-review` 与 `trade-execution` 完整源码回收到 `skills/`，包含引用文档、审计脚本、契约测试和 UI 元数据；真实本机目标继续只留在忽略的 `config.local.json`。

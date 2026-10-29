@@ -52,7 +52,7 @@ def stop_semantics(**overrides: object) -> dict:
     """Valid persisted `review.stop_semantics`; INTRADAY_HARD at the ticket's 95.00 stop_trigger."""
     base = {"basis": {"kind": "PRIOR_B1_N_LOW", "level": "95.00",
                       "evidence": "below the prior N low named in the thesis"},
-            "activation": "INTRADAY_HARD", "reclaim_by": None,
+            "activation": "INTRADAY_HARD",
             "broker_implementation": "sell stop-limit 95.00/94.50 after the entry fill"}
     base.update(overrides)
     return base
@@ -479,11 +479,11 @@ def open_position(**overrides: object) -> dict:
 
 class StopSemantics(Blocks):
     CONFIRM = dict(activation="CLOSE_CONFIRM",
-                   basis={"kind": "ENTRY_CANDLE_LOW", "level": "96.00",
+                   basis={"kind": "ENTRY_CANDLE_LOW", "level": "95.00",
                           "evidence": "buy candle low from the thesis"},
-                   broker_implementation="close alert at 96.00; after the close, sell manually")
+                   broker_implementation="close alert at 95.00; after the close, sell manually")
     RECLAIM = dict(activation="NEXT_SESSION_FAILURE_TO_RECLAIM", reclaim_by="next session 10:00",
-                   basis={"kind": "WHITE_LINE", "level": "96.00", "evidence": "white line"},
+                   basis={"kind": "WHITE_LINE", "level": "95.00", "evidence": "white line"},
                    broker_implementation="check at 10:00; if not reclaimed, sell manually")
 
     def test_missing_stop_semantics_blocks_every_execution_audit(self) -> None:
@@ -530,7 +530,7 @@ class StopSemantics(Blocks):
 
     def test_intraday_hard_stop_trigger_must_equal_basis_level(self) -> None:
         sem = stop_semantics(basis={"kind": "WHITE_LINE", "level": "95.50", "evidence": "x"})
-        self.assert_blocked(check(with_stop(ticket(), sem)), "to equal stop_semantics.basis.level")
+        self.assert_blocked(check(with_stop(ticket(), sem)), "must equal the persisted stop_trigger")
 
     def test_intraday_hard_pre_submit_shows_the_live_protective_stop_limit(self) -> None:
         result = check()
@@ -562,9 +562,24 @@ class StopSemantics(Blocks):
         no_key = stop_semantics(**self.RECLAIM)
         del no_key["reclaim_by"]
         self.assert_blocked(check(with_stop(ticket(), no_key)), "reclaim_by")
-        optional = stop_semantics(**self.CONFIRM)
-        del optional["reclaim_by"]
-        self.assertEqual(check(with_stop(ticket(), optional))["blockers"], [])
+        self.assertEqual(check(with_stop(ticket(), stop_semantics(**self.CONFIRM)))["blockers"], [])
+        self.assertEqual(check(with_stop(ticket(), stop_semantics(**self.RECLAIM)))["blockers"], [])
+
+    def test_reclaim_by_is_allowed_only_for_next_session_failure_to_reclaim(self) -> None:
+        for base in (stop_semantics(), stop_semantics(**self.CONFIRM)):
+            for value in ("next session 10:00", None, "", 5):
+                self.assert_blocked(check(with_stop(ticket(), {**base, "reclaim_by": value})),
+                                    "reclaim_by is allowed only for NEXT_SESSION_FAILURE_TO_RECLAIM")
+
+    def test_basis_level_must_equal_stop_trigger_for_every_activation(self) -> None:
+        for base in (stop_semantics(), stop_semantics(**self.CONFIRM), stop_semantics(**self.RECLAIM)):
+            self.assertEqual(check(with_stop(ticket(), base))["blockers"], [], base["activation"])
+            for other in ("95.50", "94.99", "96.00"):
+                sem = {**base, "basis": {**base["basis"], "level": other}}
+                self.assert_blocked(check(with_stop(ticket(), sem)),
+                                    "must equal the persisted stop_trigger 95.00 for every activation")
+            same_value = {**base, "basis": {**base["basis"], "level": "95.0000"}}
+            self.assertEqual(check(with_stop(ticket(), same_value))["blockers"], [], base["activation"])
 
     def test_protective_blocks_when_activation_is_not_intraday_hard(self) -> None:
         for extra in (self.CONFIRM, self.RECLAIM):
@@ -844,7 +859,7 @@ def historical_args(**overrides: object) -> dict:
     return base
 
 
-HIST_AUDIT_OK = {"available": True, "ok": True, "issues": []}
+HIST_AUDIT_OK = {"available": True, "ok": True, "tickets": 0, "historical_trades": 1, "issues": []}
 
 
 class HistoricalPostTradeReview(Blocks):
@@ -878,6 +893,23 @@ class HistoricalPostTradeReview(Blocks):
 
     def test_service_audit_must_be_clean(self) -> None:
         self.assert_blocked(self.run_review(svc=None), "service audit")
+
+    def test_service_audit_must_be_scoped_to_exactly_this_historical_trade(self) -> None:
+        self.assertEqual(self.run_review(svc=HIST_AUDIT_OK)["verdict"], "ARGS_OK")
+        unscoped = {"available": True, "ok": True, "tickets": 0, "issues": []}  # no historical_trades key
+        bad = {"missing historical_trades (unscoped clean audit)": unscoped,
+               "all-database audit (many tickets)": {**HIST_AUDIT_OK, "tickets": 7, "historical_trades": 3},
+               "tickets present": {**HIST_AUDIT_OK, "tickets": 1},
+               "two historical trades": {**HIST_AUDIT_OK, "historical_trades": 2},
+               "zero historical trades": {**HIST_AUDIT_OK, "historical_trades": 0},
+               "string count": {**HIST_AUDIT_OK, "historical_trades": "1"},
+               "bool count": {**HIST_AUDIT_OK, "historical_trades": True},
+               "missing tickets": {k: v for k, v in HIST_AUDIT_OK.items() if k != "tickets"},
+               "unavailable": {**HIST_AUDIT_OK, "available": False}}
+        for label, svc in bad.items():
+            result = self.run_review(svc=svc)
+            self.assertEqual(result["verdict"], "BLOCKED", label)
+            self.assertTrue(any("scoped to exactly this historical trade" in b for b in result["blockers"]), label)
         self.assert_blocked(self.run_review(svc={**HIST_AUDIT_OK, "ok": False}), "service audit")
         self.assert_blocked(self.run_review(svc={**HIST_AUDIT_OK, "issues": ["x"]}), "service audit")
 

@@ -9,11 +9,11 @@ Every new executable ticket draft carries a `stop_semantics` object in its persi
 ```json
 {"basis": {"kind": "<BASIS>", "level": "<price>", "evidence": "<why this level, from the thesis/setup>"},
  "activation": "<ACTIVATION>",
- "reclaim_by": "<session; required for NEXT_SESSION_FAILURE_TO_RECLAIM>",
+ "reclaim_by": "<session; ONLY for NEXT_SESSION_FAILURE_TO_RECLAIM, where it is required; the key is absent for the other two>",
  "broker_implementation": "<how the human implements it at the broker; optional for INTRADAY_HARD>"}
 ```
 
-Exact schema, enforced by `scripts/audit_ticket.py`: `basis` has exactly `kind`, `level`, `evidence`; `basis.level` is decimal TEXT (at most 4 places) and `basis.evidence` is non-empty text supporting it; `activation` is exactly one of the three values below; `reclaim_by` is non-empty text and required for `NEXT_SESSION_FAILURE_TO_RECLAIM`; `broker_implementation` is optional for `INTRADAY_HARD` but non-empty text if present, and required non-empty text for `CLOSE_CONFIRM` and `NEXT_SESSION_FAILURE_TO_RECLAIM`. No other keys. For `INTRADAY_HARD` the ticket's `stop_trigger` must equal `basis.level`.
+Exact schema, enforced by `scripts/audit_ticket.py`: `basis` has exactly `kind`, `level`, `evidence`; `basis.level` is decimal TEXT (at most 4 places) and `basis.evidence` is non-empty text supporting it; `activation` is exactly one of the three values below; `reclaim_by` is required non-empty text for `NEXT_SESSION_FAILURE_TO_RECLAIM` and is allowed only there (present for any other activation, even as null, it BLOCKS); `broker_implementation` is optional for `INTRADAY_HARD` but non-empty text if present, and required non-empty text for `CLOSE_CONFIRM` and `NEXT_SESSION_FAILURE_TO_RECLAIM`. Unknown keys BLOCK. For every activation the ticket's `stop_trigger` must equal `basis.level` (the numeric stop is the reference level of the stated basis); this is the lifecycle service's own rule, mirrored here.
 
 ## Basis: what level, and why
 
@@ -41,7 +41,7 @@ Execution must not turn a `CLOSE_CONFIRM` or `NEXT_SESSION_FAILURE_TO_RECLAIM` r
 
 1. `stop_semantics` is present and valid per the schema above; `basis.evidence` ties the level to the thesis/setup (the audit checks it is non-empty; the human reads that it fits).
 2. `NEXT_SESSION_FAILURE_TO_RECLAIM` has `reclaim_by`.
-3. For `INTRADAY_HARD`, the ticket's `stop_trigger` / `stop_limit` agree with `basis.level`. For the other activations they are the reference level, not a live order.
+3. `stop_trigger` equals `basis.level` for every activation. For `INTRADAY_HARD` `stop_trigger` / `stop_limit` are the live order; for the other activations they are the reference level, not a live order.
 4. The broker order can implement the activation. `INTRADAY_HARD` maps to a STOP_LIMIT. For the other two a broker stop order cannot express it: show the human-only procedure persisted in `broker_implementation` and no live stop form.
 
 Any failure: BLOCK, name the missing or conflicting item, and require a new or amended ticket. Do not improvise from chat.

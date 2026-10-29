@@ -14,10 +14,11 @@ z哥's stop rules differ by setup, position state, and regime. A draft applies e
 | `template_id` | setup / state / regime | basis kind | activation | source anchors |
 |---|---|---|---|---|
 | `B1_FRESH_ENTRY_LOW_CLOSE_CONFIRM` | B1 / FRESH_UNFLOWN / TIGHT or LOOSE (normal fresh B1; B1 is preferred in TIGHT) | `ENTRY_CANDLE_LOW` | `CLOSE_CONFIRM` | 2025-11-12, 2025-11-26 |
-| `B1_FRESH_ENTRY_LOW_INTRADAY_HARD` | B1 / FRESH_UNFLOWN / either (explicit hand-tight override only) | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` | 2025-11-12, 2025-11-26 |
+| `B1_FRESH_ENTRY_LOW_INTRADAY_HARD` | B1 / FRESH_UNFLOWN / TIGHT only (explicit hand-tight override sourced from z哥 for TIGHT; never selectable in LOOSE) | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` | 2025-11-12, 2025-11-26 |
 | `B1_FLOWN_N_LOW_WHITE_LINE_CLOSE_CONFIRM` | B1 / FLOWN / either (invalid for fresh unflown) | `PRIOR_B1_N_LOW` or `WHITE_LINE` | `CLOSE_CONFIRM` | 2025-11-12 |
 | `B1_FLOWN_YELLOW_LINE_CLOSE_CONFIRM` | B1 / FLOWN / either (explicit alternative, no default) | `YELLOW_LINE` | `CLOSE_CONFIRM` | 2025-12-03, 2026-01-21 |
-| `B2_STRUCTURAL_PRIOR_LOW_CLOSE_CONFIRM` | B2 / FRESH_UNFLOWN or ALREADY_RISEN / LOOSE | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` | 2025-10-06 (two-session rule), 2026-01-21 |
+| `B2_FRESH_PRIOR_LOW_TWO_SESSION_CLOSE_CONFIRM` | B2 / FRESH_UNFLOWN / LOOSE (fresh entry: carries the two-session failure-to-explode clock) | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` | 2025-10-06 (two-session rule) |
+| `B2_RISEN_PRIOR_LOW_CLOSE_CONFIRM` | B2 / ALREADY_RISEN / LOOSE (pullback: governed by the prior B1/N low and the stated no-S1 context; the fresh-entry two-session exit does not apply) | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` | 2025-10-06 (prior low), 2026-01-21 |
 | `B2_TIGHT_ENTRY_LOW_INTRADAY_HARD` | B2 / FRESH_UNFLOWN / TIGHT (tight variant) | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` | 2026-01-14, 2026-01-07 |
 | `B2_KEY_K_PLATFORM_CLOSE_CONFIRM` | B2 / FRESH_UNFLOWN or ALREADY_RISEN / LOOSE | `KEY_K_OR_PLATFORM` | `CLOSE_CONFIRM` | 2025-10-06, 2026-01-21 |
 | `B2_YELLOW_LINE_CLOSE_CONFIRM` | B2 / FRESH_UNFLOWN or ALREADY_RISEN / LOOSE (explicit alternative, no default) | `YELLOW_LINE` | `CLOSE_CONFIRM` | 2025-12-03, 2026-01-21 |

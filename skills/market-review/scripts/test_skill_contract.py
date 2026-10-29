@@ -116,7 +116,7 @@ class StopSemanticsDraftContract(unittest.TestCase):
             self.assertIn(term, self.draft)
         self.assertIn('"stop_semantics": {"basis"', self.raw_draft)
         self.assertNotIn('"review": {', self.raw_draft)
-        self.assertIn("required for NEXT_SESSION_FAILURE_TO_RECLAIM", self.draft)
+        self.assertIn("ONLY for NEXT_SESSION_FAILURE_TO_RECLAIM, where it is required", self.draft)
         self.assertIn("`stop_semantics` is a top-level keyword argument of `create_draft_from_plan`", self.draft)
         self.assertIn("never pass a caller-built `review` object", self.draft)
         self.assertIn("Every new draft's args must carry the human-approved top-level `stop_semantics`", self.skill)
@@ -139,6 +139,18 @@ class StopSemanticsDraftContract(unittest.TestCase):
                        "never by moving the level or changing the activation"):
             self.assertIn(phrase, self.draft)
         self.assertIn("you persist it and never invent it", self.skill)
+
+    def test_draft_docs_state_the_exact_service_contract(self) -> None:
+        for phrase in ("`reclaim_by` is required for, and allowed only with, `NEXT_SESSION_FAILURE_TO_RECLAIM`",
+                       "even as null, is rejected",
+                       "`broker_implementation` is required for `CLOSE_CONFIRM` and "
+                       "`NEXT_SESSION_FAILURE_TO_RECLAIM`, optional for `INTRADAY_HARD`, and non-empty if present",
+                       "Unknown keys fail",
+                       "For every activation `stop_trigger` must equal `basis.level`",
+                       "omit the key for every other activation"):
+            self.assertIn(phrase, self.draft)
+        self.assertNotIn("otherwise optional", self.draft)
+        self.assertNotIn("For `INTRADAY_HARD`, `stop_trigger` must equal `basis.level`", self.draft)
 
     def test_enforcement_and_readback_are_stated(self) -> None:
         self.assertIn("`stop_trigger` must equal `basis.level`", self.draft)
