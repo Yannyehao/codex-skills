@@ -25,7 +25,7 @@ cd codex-skills
 
 `market-review` 与 `trade-execution` 首次使用时，分别把安装目录内的 `config.example.json` 复制为 `config.local.json`，填写本机 zAI 项目、候选数据库和交易生命周期服务目标。该配置不会提交，重复安装会保留。复盘默认只读；生成交易单时只选择一个精确交易类型，`zge-stop-v1` 自动给出唯一的止损依据、触发方式和状态/时间退出。执行 Skill 只能读取已落库、已人工批准且统一策略标记与止损语义匹配的交易单，不代替用户操作券商，也不会把收盘确认止损翻译成盘中 STOP_LIMIT。
 
-历史执行练兵走 trade-execution 的 replay lane，不需要也不读取本机服务配置：先用截止日安全证据生成明确标为 `REPLAY` 的模拟条款，再依次揭示开盘与收盘事件。replay 直接复用 market-review 的 `zge-stop-v1` 选择器，只输出带证据哈希的模拟 journal；它不调用 lifecycle `apply`、不写生产 SQLite，也不形成真实订单、成交或持仓。真实下单仍必须重新走固化、服务内人工批准和 live 审计。
+历史执行练兵走 trade-execution 的 replay lane，不需要也不读取本机服务配置：先用截止日安全证据生成明确标为 `REPLAY` 的模拟条款，再依次揭示一个交易日的开盘与收盘事件。replay 直接复用 market-review 的 `zge-stop-v1` 选择器，只用 exclusive create 新建 `.json` journal；它不覆盖文件、不调用 lifecycle `apply`、不写生产 SQLite，也不形成真实订单、成交或持仓。v1 不处理下一交易日和多日持仓。真实下单仍必须重新走固化、服务内人工批准和 live 审计。
 
 `us-market-review` 只是兼容旧 `$us-market-review` 命令的显式别名，不保存复盘逻辑，也不会被“美股复盘”自动触发；普通请求统一进入 `market-review`。
 

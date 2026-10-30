@@ -3,11 +3,17 @@
 Replay answers a different question from live execution: “using only what was knowable at the
 decision cutoff, what would this approved simulation have done as later stages were revealed?” It is
 training and case evidence, not a lifecycle ticket, broker instruction, order, fill, or position.
+Version 1 replays exactly one execution session: `OPEN` then that session's `CLOSE`. Later sessions,
+multi-day holding management, targets, and exits belong to a future version and must not be inferred
+from this journal.
 
 ## Hard boundary
 
 - Replay never reads `config.local.json`, never opens the lifecycle database, never calls
   `zradar.trade_lifecycle`, and has no `apply` operation.
+- `--output` accepts only a new `.json` path and uses exclusive creation. An existing JSON, database,
+  or any other file is never overwritten; failure details fall back to stdout when the requested
+  destination is unsafe or already exists.
 - Its human approval approves only the simulation terms. It is not the lifecycle service's
   `APPROVED` event and cannot be converted into one.
 - Keep scenario, event, and journal files in a temporary directory or a case-evidence directory,
@@ -29,7 +35,10 @@ hidden in the answer. Replay therefore accepts information in this order only:
 
 The open event and its evidence JSON reject `high`, `low`, `close`, and `volume`. Close cannot be
 submitted before open. Every input is hashed into an immutable `replay_id`; altering the plan makes
-the next stage fail.
+the next stage fail. These checks prove file hashes, declared `last_bar_date`, exact stage order, and
+the limited JSON fields used at OPEN/CLOSE. They cannot prove that free text is honest or that an
+image contains no later annotation. The human must inspect `source.decision_statement`,
+`basis_evidence`, and cutoff images for hindsight before approving the replay.
 
 ## Prepare a scenario
 
@@ -54,7 +63,7 @@ optional. Every other field below is required:
   "source": {
     "kind": "case_annotation",
     "reference": "case:<stable reference>",
-    "user_verdict": "the user's stated historical judgment"
+    "decision_statement": "the decision being simulated using cutoff knowledge only"
   },
   "simulation_approval": {
     "approved_by": "human:NAME",
@@ -82,6 +91,12 @@ optional. Every other field below is required:
   }]
 }
 ```
+
+`source.reference` may point to a later case annotation for provenance, but
+`source.decision_statement` states only what the simulated decision maker decides at the cutoff. Do
+not paste the case's later outcome or hindsight verdict into the prepared plan; results enter only
+through subsequent event stages. This is a semantic human-review requirement, not something a
+free-text validator can prove automatically.
 
 The helper loads the canonical selector from the sibling `market-review` skill. `trade_type` must be
 one exact `zge-stop-v1` type; the helper derives basis kind, activation, broker mode, and holding
@@ -151,12 +166,14 @@ The stop result preserves canonical semantics:
 - holding/time rules are returned as `HUMAN_JUDGMENT_REQUIRED`; the script does not infer a chart
   verdict from OHLC.
 
-The final journal is deterministic, carries every evidence hash, retains `production_writes: false`
-and `broker_actions: false`, and is suitable as a cutoff-aware artifact for a later case annotation.
+The final single-session journal is deterministic, carries every evidence hash, retains
+`production_writes: false` and `broker_actions: false`, and is suitable as a cutoff-aware artifact
+for a later case annotation. It does not say what happens on the next session and does not manage a
+hypothetical holding beyond the recorded close.
 
 ## Stop conditions
 
 Block rather than repair when a stage is skipped, a plan is edited after prepare, an evidence hash
-does not match, an open snapshot contains end-of-day fields, the canonical selector is missing, or a
-simulation term is absent. Never fall back from replay to the live service and never make replay
-approval look like live approval.
+does not match, an open snapshot contains end-of-day fields, the canonical selector is missing, a
+simulation term is absent, or the output path is not a new `.json` file. Never fall back from replay
+to the live service, overwrite an artifact, or make replay approval look like live approval.

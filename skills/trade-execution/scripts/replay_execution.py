@@ -44,7 +44,7 @@ PLAN_KEYS = {
 }
 APPROVAL_KEYS = {"approved_by", "approved_at", "note"}
 EVIDENCE_KEYS = {"role", "kind", "path", "sha256", "last_bar_date"}
-SOURCE_KEYS = {"kind", "reference", "user_verdict"}
+SOURCE_KEYS = {"kind", "reference", "decision_statement"}
 COMMON_EVENT_KEYS = {"schema", "mode", "replay_id", "stage", "session_date", "evidence"}
 OPEN_EVENT_KEYS = COMMON_EVENT_KEYS | {"quote_kind", "bid", "ask", "open"}
 CLOSE_EVENT_KEYS = COMMON_EVENT_KEYS | {"open", "high", "low", "close", "volume"}
@@ -63,7 +63,13 @@ def _write(payload: dict[str, Any], path: Path | None) -> None:
     if path is None:
         sys.stdout.write(text)
     else:
-        path.write_text(text, encoding="utf-8")
+        if path.suffix.lower() != ".json":
+            raise ReplayBlocked("--output must end in .json; replay never writes databases or other file types")
+        try:
+            with path.open("x", encoding="utf-8") as stream:
+                stream.write(text)
+        except FileExistsError as exc:
+            raise ReplayBlocked(f"output already exists and will not be overwritten: {path}") from exc
 
 
 def _canonical(value: Any) -> str:
@@ -407,9 +413,15 @@ def main(argv: list[str] | None = None) -> int:
         _write(result, args.output)
         return 0
     except (OSError, json.JSONDecodeError, ReplayBlocked) as exc:
-        _write({"schema": JOURNAL_SCHEMA, "mode": "REPLAY", "verdict": "BLOCKED",
-                "production_writes": False, "broker_actions": False,
-                "blockers": [str(exc)]}, args.output)
+        blocked = {"schema": JOURNAL_SCHEMA, "mode": "REPLAY", "verdict": "BLOCKED",
+                   "production_writes": False, "broker_actions": False,
+                   "blockers": [str(exc)]}
+        try:
+            _write(blocked, args.output)
+        except (OSError, ReplayBlocked):
+            # The requested destination is unsafe or already exists.  Report on stdout only; a
+            # failure path must never turn into an overwrite attempt.
+            _write(blocked, None)
         return 2
 
 

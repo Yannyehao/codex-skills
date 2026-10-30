@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import replay_execution as replay
@@ -37,7 +39,7 @@ class ReplayFixture(unittest.TestCase):
             "decision_cutoff": "20261028",
             "execution_date": "20261029",
             "source": {"kind": "case_annotation", "reference": "case:abc",
-                       "user_verdict": "28日决定做，29日按预案模拟"},
+                       "decision_statement": "截至28日决定：29日若价格符合上限则模拟执行"},
             "simulation_approval": {"approved_by": "human:tester",
                                     "approved_at": "2026-10-30T12:00:00-04:00",
                                     "note": "批准历史复盘条款，不是实盘授权"},
@@ -203,6 +205,53 @@ class SafetySurfaceTests(unittest.TestCase):
         self.assertNotIn("sqlite3", text)
         self.assertNotIn("zradar.trade_lifecycle", text)
         self.assertNotIn("apply --op", text)
+
+
+class ExclusiveOutputTests(ReplayFixture):
+    def write_plan(self) -> Path:
+        path = self.root / "plan.json"
+        path.write_text(json.dumps(self.plan()), encoding="utf-8")
+        return path
+
+    def call_prepare(self, output: Path) -> tuple[int, dict]:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            rc = replay.main(["prepare", "--plan", str(self.write_plan()),
+                              "--output", str(output)])
+        return rc, json.loads(stdout.getvalue())
+
+    def test_existing_json_is_never_overwritten_even_by_blocked_failure_output(self) -> None:
+        output = self.root / "existing.json"
+        original = b'{"important":"keep me"}\n'
+        output.write_bytes(original)
+        rc, report = self.call_prepare(output)
+        self.assertEqual(rc, 2)
+        self.assertEqual(output.read_bytes(), original)
+        self.assertEqual(report["verdict"], "BLOCKED")
+        self.assertIn("will not be overwritten", report["blockers"][0])
+
+    def test_non_json_database_path_is_never_touched(self) -> None:
+        output = self.root / "ledger.sqlite3"
+        original = b"SQLite format 3\x00important-production-bytes"
+        output.write_bytes(original)
+        rc, report = self.call_prepare(output)
+        self.assertEqual(rc, 2)
+        self.assertEqual(output.read_bytes(), original)
+        self.assertEqual(report["verdict"], "BLOCKED")
+        self.assertIn("must end in .json", report["blockers"][0])
+
+    def test_new_json_is_created_once_and_second_run_cannot_replace_it(self) -> None:
+        output = self.root / "new.json"
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            first = replay.main(["prepare", "--plan", str(self.write_plan()),
+                                 "--output", str(output)])
+        self.assertEqual(first, 0)
+        original = output.read_bytes()
+        second, report = self.call_prepare(output)
+        self.assertEqual(second, 2)
+        self.assertEqual(output.read_bytes(), original)
+        self.assertIn("will not be overwritten", report["blockers"][0])
 
 
 if __name__ == "__main__":

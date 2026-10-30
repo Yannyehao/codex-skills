@@ -4,6 +4,8 @@
 - 新增完全隔离的 replay lane：先冻结截止日安全计划，再按 OPEN / CLOSE 两个事件逐步揭示；开盘事件及其证据 JSON 若夹带高低收量会 fail closed。
 - replay 从相邻 market-review 直接加载 `zge-stop-v1`，不复制止损规则；黄线 B1 继续按收盘确认，砖 0 日盘中跌破只记“触发、成交未知”。
 - replay 没有 lifecycle service / SQLite / broker 写入口，模拟批准不冒充实盘批准；输出均标记 REPLAY、零生产写入，可作为 trade-case-logger 的截止日证据。
+- 输出只允许以 exclusive create 新建 `.json`，已有 JSON / SQLite / 其他文件一律不覆盖；`decision_statement` 只表达 cutoff 时点决定，事后结果必须等事件阶段，free text / 图片仍由人审前视。
+- v1 明确只覆盖一个 execution session 的 OPEN→CLOSE，不声称支持次日与多日持仓管理。
 - 新增行为测试覆盖未来泄露、计划篡改、风险预算、开盘代理、被动限价、黄线收盘止损和砖盘中触发。
 
 ## 2026-10-28 · `zge-stop-v1` 一种交易对应一种止损

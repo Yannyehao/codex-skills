@@ -41,11 +41,11 @@ Allowed `apply` operations: `submit_order`, `attach_stop`, `amend_order`, `cance
 
 ## Historical replay mode
 
-Read [references/replay.md](references/replay.md) and keep the files outside production outputs. Build and obtain explicit human approval for a `REPLAY` scenario using only evidence whose `last_bar_date` is at or before `decision_cutoff`; this approval covers the simulation terms only. Run `prepare`, then reveal exactly one `OPEN` event, then one `CLOSE` event. Never combine stages in one input, point the open event at a full end-of-day bar, or summarize later prices before their stage is admitted.
+Read [references/replay.md](references/replay.md) and keep the files outside production outputs. Build and obtain explicit human approval for a `REPLAY` scenario using only evidence whose `last_bar_date` is at or before `decision_cutoff`; this approval covers the simulation terms only. `source.decision_statement` records only the cutoff-time decision; a later case annotation may be cited by reference but its outcome must not be copied into PREPARED. Run `prepare`, then reveal exactly one `OPEN` event, then one `CLOSE` event. Version 1 stops at that close: it does not replay later sessions or manage a multi-day holding. Never combine stages in one input, point the open event at a full end-of-day bar, or summarize later prices before their stage is admitted. `--output` must be a new `.json` path and is never overwritten.
 
 The replay helper loads `zge-stop-v1` from the sibling `market-review` skill, so one exact `canonical_trade_type` determines the stop. It blocks if the selector is absent. In particular, `B1_YELLOW_LINE_SWING` remains `CLOSE_CONFIRM`: an intraday move below yellow is not a stop; only the regular-session close decides. `BRICK_ZERO_DAY` alone uses `INTRADAY_HARD`, and a daily low can prove only that it triggered, never that a stop-limit filled.
 
-Report every result as hypothetical with its evidence limitations. The final journal may be passed to `trade-case-logger` as evidence, but this skill does not write the case, production ledger, lifecycle service, or broker. To place a real order, discard the replay path and return to live setup from a newly drafted and approved service ticket.
+Report every result as hypothetical with its evidence limitations. The helper verifies hashes, declared dates, stage order and stage-limited JSON; free text and images still require human hindsight review. The final journal may be passed to `trade-case-logger` as evidence, but this skill does not write the case, production ledger, lifecycle service, or broker. To place a real order, discard the replay path and return to live setup from a newly drafted and approved service ticket.
 
 ## Post-trade review mode
 
