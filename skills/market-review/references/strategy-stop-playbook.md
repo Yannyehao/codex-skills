@@ -13,20 +13,31 @@ Regime (`TIGHT` / `LOOSE`) and position state are not stop inputs. Regime affect
 | `B1_YELLOW_LINE_SWING` | `YELLOW_LINE` | `CLOSE_CONFIRM` | `HUMAN_ONLY_ALERT` | `YELLOW_SUPPORT_SECOND_SESSION_CONFIRM` (yellow is the last support; second session must confirm resistance is overcome) | 2026-02-11 (swing stop at yellow) |
 | `B2_FRESH_CONFIRMATION` | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` | `HUMAN_ONLY_ALERT` | `B2_TWO_SESSION_EXPLOSION` (must explode within two sessions) | 2025-10-06 |
 | `B2_RISEN_PULLBACK` | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` | `HUMAN_ONLY_ALERT` | `B2_RISEN_STRUCTURE_HOLD` (no fresh two-session clock; hold while the prior N low is intact and there is no S1) | 2026-01-21 |
-| `BRICK_ZERO_DAY` | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` | `LIVE_STOP_LIMIT` (disaster stop) | `BRICK_NEXT_OPEN_NO_EXPLOSION` (no lift at the next open, checked 9:33 / 9:37, exits), `BRICK_RED_TO_GREEN` | 2026-02-20 (entry-K low, two-bar gamble), 2026-03-29 (brick state, next open) |
+| `BRICK_ZERO_DAY` | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` | `LIVE_STOP_LIMIT` (disaster stop) | `BRICK_NEXT_OPEN_NO_EXPLOSION` (no lift at the next open exits; check time unresolved, judged manually), `BRICK_RED_TO_GREEN` | 2026-02-20 (entry-K low, two-bar gamble), 2026-03-29 (brick state, next open) |
 
 Every type also cites 2026-04-22, the close-versus-intraday meta-rule.
 
 ## `BRICK_ZERO_DAY` entry timing
 
-`BRICK_ZERO_DAY` names the first-red-brick **signal state**; it is not a rule that entry must happen on the signal day. There is one type and one stop for both timings, per 2026-02-20 section 18 (anchors 5144, 5167, 5179):
+`BRICK_ZERO_DAY` names the first-red-brick **signal state**; it is not a rule that entry must happen on the signal day. There is one type for both timings, per 2026-02-20 section 18 (anchors 5144, 5167, 5179):
 
 - Entry may be near the signal-day close or on the next trading-day morning. A next-morning entry must not chase.
 - A next-morning gap of about +2% is human judgment, neither an automatic accept nor an automatic reject. +4% or more is skip / no chase.
 - Volume ratio is not a hard condition and gates nothing here.
 - A next-morning entry freezes `entry_max` before the open, chosen by the human under the bounds above. Execution honors that persisted ceiling and derives no gap percentage of its own.
 
-The stop basis stays the buy-candle low. For a next-morning entry that candle is still forming at the open, so its low is not knowable before entry. The prior signal candle's low is a different level and never substitutes for it. The helper and the draft require a real `basis_level` and have no deferred-level path, so a complete next-morning ticket cannot be drafted yet: treat `basis_level` as missing, ask, and write nothing. This playbook supplies no replacement stop for that gap.
+The default stop basis is the buy-candle low. For a next-morning entry that candle is still forming at the open, so its low is not knowable before entry. An arbitrary prior signal candle's low never substitutes for it. A reversal-K or bottom-fractal low independently confirmed by the cutoff is a separate valid basis (`STOP_BASIS_ONLY`, so it still drafts no ticket under `zge-stop-v1`). Otherwise the result is gate-only: no stop, ticket, or fill.
+
+## Fact compiler
+
+`scripts/compile_trade_policy.py --facts <json>` derives the trade type and basis from observable facts: `cutoff_date`, `cutoff_phase`, `observed_families`, `states`, `entry`, `basis_candidates`, `evidence`. `trade_type`, `basis_kind`, `activation`, `broker_mode`, and `template_id` are rejected at any depth. The first failed check blocks with one stable code.
+
+- Each candidate must be known at the cutoff. Any two levels that differ block with `BASIS_CONFLICT`; there is no numeric gap or volume rule.
+- Dates must be real calendar dates. `NEXT_OPEN` only needs a later session; there is no trading calendar, so replay evidence or the outer workflow establishes the next observed session.
+- Brick `SIGNAL_CLOSE` needs the buy-candle low. Brick `NEXT_OPEN` needs a frozen `entry_max`.
+- A reversal-K or bottom-fractal low with its own confirmation may supply a `NEXT_OPEN` brick stop or corroborate an equal buy-candle low. A bottom fractal needs a later bar.
+- `NEXT_OPEN` brick with no such level is `ENTRY_GATE_ONLY`: no stop, ticket, or fill.
+- A key-K brick stop is `STOP_BASIS_ONLY`: `zge-stop-v1` labels the brick basis `ENTRY_CANDLE_LOW`, so no `stop_semantics` is emitted and no ticket can be drafted from it.
 
 ## Activation semantics
 

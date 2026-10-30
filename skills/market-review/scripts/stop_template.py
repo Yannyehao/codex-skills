@@ -106,9 +106,12 @@ TRADE_TYPES: dict[str, dict[str, Any]] = {
         "Brick zero-day disaster stop (price only) at the entry-candle low {level}. " + HARD_RULE,
         "A brick must show strength at the next open; the price stop alone does not decide the hold.",
         (("BRICK_NEXT_OPEN_NO_EXPLOSION", "TIME",
-          "If the stock does not lift after the next session's open (check at 9:33 and 9:37), exit by "
-          "manual order even though the price stop was not touched."),
-         ("BRICK_RED_TO_GREEN", "STATE", "A brick turning from red to green is a state exit signal."))),
+          "If the stock does not lift after the next session's open, exit by manual order even though "
+          "the price stop was not touched. The course leaves the check time unresolved between 9:33 "
+          "and 9:37 (2026-02-20); no single time is fixed."),
+         ("BRICK_RED_TO_GREEN", "STATE",
+          "Later version (2026-03-29): trust a brick turning from red to green as a state exit signal "
+          "for a brick-origin entry. The early version (2026-02-20) did not treat it as an exit."))),
 }
 
 DECIMAL_RE = re.compile(r"^\d+(\.\d+)?$")

@@ -174,14 +174,9 @@ class StageTests(ReplayFixture):
         self.assertEqual(closed["replay_state"]["entry"], "HYPOTHETICALLY_FILLED")
         self.assertIn("sequence", closed["replay_state"]["hypothetical_fill"]["assumption"])
 
-    def test_brick_zero_day_uses_intraday_hard_trigger_but_does_not_invent_fill(self) -> None:
-        plan = self.plan("BRICK_ZERO_DAY")
-        # BRICK maps to entry-candle low but the generic fixture level is still a valid supplied level.
-        prepared = replay.prepare(plan)
-        closed = self.close(self.open(prepared), low="61.50", close="65.59")
-        self.assertEqual(closed["plan"]["stop_policy"]["stop_semantics"]["activation"],
-                         "INTRADAY_HARD")
-        self.assertEqual(closed["replay_state"]["stop"], "TRIGGERED_FILL_UNKNOWN")
+    def test_full_plan_rejects_brick_so_it_cannot_bypass_the_compiler(self) -> None:
+        with self.assertRaisesRegex(replay.ReplayBlocked, "BRICK_ZERO_DAY cannot use a full plan"):
+            replay.prepare(self.plan("BRICK_ZERO_DAY"))
 
     def test_stages_are_strictly_monotonic(self) -> None:
         journal = self.prepared()
@@ -252,6 +247,70 @@ class ExclusiveOutputTests(ReplayFixture):
         self.assertEqual(second, 2)
         self.assertEqual(output.read_bytes(), original)
         self.assertIn("will not be overwritten", report["blockers"][0])
+
+
+class GateOnlyReplay(ReplayFixture):
+    def gate_plan(self, candidates: list | None = None) -> dict:
+        plan = {k: v for k, v in self.plan().items() if k in replay.GATE_PLAN_KEYS}
+        plan["entry_max"] = "62.50"
+        plan["chart_facts"] = {
+            "cutoff_date": "20261028", "cutoff_phase": "AFTER_CLOSE", "observed_families": ["BRICK"],
+            "states": {"first_red_brick": "PRESENT"}, "evidence": "reading",
+            "entry": {"timing": "NEXT_OPEN", "session_date": "20261029", "entry_max": "62.50"},
+            "basis_candidates": candidates or []}
+        return plan
+
+    def open_quote(self, journal: dict, ask: str) -> dict:
+        return replay.advance(journal, self.event("OPEN", journal["replay_id"], quote_kind="OHLC_OPEN_PROXY",
+                                                  bid=ask, ask=ask, open=ask))
+
+    def test_price_within_gate_is_pending_and_above_is_blocked(self) -> None:
+        journal = replay.prepare(self.gate_plan())
+        self.assertEqual(journal["plan"]["entry_max"], "62.50")
+        self.assertEqual(journal["plan"]["compiler"], {"status": "ENTRY_GATE_ONLY", "policy": "zge-stop-v1"})
+        self.assertEqual(self.open_quote(journal, "62.50")["replay_state"],
+                         {"entry": "PRICE_ELIGIBLE_STOP_PENDING"})
+        self.assertEqual(self.open_quote(journal, "62.51")["replay_state"], {"entry": "BLOCKED_BY_PRICE"})
+
+    def test_journal_never_holds_a_fill_ticket_or_stop(self) -> None:
+        opened = self.open_quote(replay.prepare(self.gate_plan()), "62.00")
+        for key in ("stop_policy", "stop_limit", "quantity", "execution_mode"):
+            self.assertNotIn(key, opened["plan"])
+        self.assertNotIn("hypothetical_fill", opened["replay_state"])
+        self.assertNotIn("stop", opened["replay_state"])
+
+    def test_replay_id_binds_chart_facts(self) -> None:
+        plan = self.gate_plan()
+        journal = replay.prepare(plan)
+        self.assertEqual(journal["plan"]["chart_facts"], plan["chart_facts"])
+        plan["chart_facts"]["evidence"] = "a different reading"
+        self.assertNotEqual(replay.prepare(plan)["replay_id"], journal["replay_id"])
+
+    def test_close_cannot_follow_a_gate_only_open(self) -> None:
+        opened = self.open_quote(replay.prepare(self.gate_plan()), "62.00")
+        close = self.event("CLOSE", opened["replay_id"], open="62", high="63", low="61", close="62", volume=1)
+        with self.assertRaisesRegex(replay.ReplayBlocked, "next event"):
+            replay.advance(opened, close)
+
+    def test_raised_entry_max_breaks_the_frozen_plan(self) -> None:
+        journal = replay.prepare(self.gate_plan())
+        journal["plan"]["entry_max"] = "63.00"
+        with self.assertRaisesRegex(replay.ReplayBlocked, "replay_id"):
+            self.open_quote(journal, "62.00")
+        plan = self.gate_plan()
+        plan["entry_max"] = "63.00"
+        with self.assertRaisesRegex(replay.ReplayBlocked, "must equal"):
+            replay.prepare(plan)
+
+    def test_gate_plan_rejects_stop_fields_and_facts_with_a_stop_basis(self) -> None:
+        plan = self.gate_plan()
+        plan["stop_limit"] = "61.00"
+        with self.assertRaisesRegex(replay.ReplayBlocked, "unexpected keys"):
+            replay.prepare(plan)
+        key_k = {"role": "CONFIRMED_REVERSAL_K_LOW", "level": "60.00", "bar_date": "20261026",
+                 "confirmed_on": "20261027", "evidence": "low", "confirmation_evidence": "held"}
+        with self.assertRaisesRegex(replay.ReplayBlocked, "STOP_BASIS_ONLY"):
+            replay.prepare(self.gate_plan([key_k]))
 
 
 if __name__ == "__main__":

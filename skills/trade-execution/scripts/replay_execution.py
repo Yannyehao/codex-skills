@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import importlib.util
 import json
 import math
@@ -41,6 +42,10 @@ PLAN_KEYS = {
     "source", "simulation_approval", "trade_type", "basis_level", "basis_evidence",
     "execution_mode", "entry_planned", "entry_max", "quantity", "stop_limit",
     "target", "fee_estimate", "risk_budget", "assume_fill_if_eligible", "evidence",
+}
+GATE_PLAN_KEYS = {
+    "schema", "mode", "market", "symbol", "decision_cutoff", "execution_date",
+    "source", "simulation_approval", "entry_max", "chart_facts", "evidence",
 }
 APPROVAL_KEYS = {"approved_by", "approved_at", "note"}
 EVIDENCE_KEYS = {"role", "kind", "path", "sha256", "last_bar_date"}
@@ -170,9 +175,47 @@ def _stop_selector() -> Any:
     return module
 
 
+def _policy_compiler() -> Any:
+    scripts = Path(__file__).resolve().parents[2] / "market-review" / "scripts"
+    if not (scripts / "trade_policy_core.py").is_file():
+        raise ReplayBlocked("trade-policy compiler is unavailable; install market-review beside trade-execution")
+    if str(scripts) not in sys.path:
+        sys.path.append(str(scripts))
+    return importlib.import_module("trade_policy_core")
+
+
+def _prepare_gate_only(plan: dict[str, Any], market: str, symbol: str, cutoff: str, execution_date: str,
+                       source: Any, approval: Any, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    """Freeze entry_max for a compiled gate-only brick; the journal can never hold a stop or a fill."""
+    compiled = _policy_compiler().compile_policy(plan["chart_facts"])
+    if compiled["status"] != "ENTRY_GATE_ONLY":
+        raise ReplayBlocked(f"gate-only replay needs ENTRY_GATE_ONLY; compiler returned "
+                            f"{compiled['status']} {compiled.get('code', '')}".rstrip())
+    entry_max = _price(plan.get("entry_max"), "entry_max")
+    entry = compiled["entry"]
+    if plan["chart_facts"]["cutoff_date"] != cutoff or entry["session_date"] != execution_date:
+        raise ReplayBlocked("chart_facts dates must equal decision_cutoff and execution_date")
+    if Decimal(entry["entry_max"]) != entry_max:
+        raise ReplayBlocked("entry_max must equal the compiled chart_facts entry_max")
+    normalized = {
+        "schema": SCHEMA, "mode": "REPLAY", "market": market, "symbol": symbol,
+        "decision_cutoff": cutoff, "execution_date": execution_date, "source": source,
+        "simulation_approval": approval, "gate_only": True, "trade_type": compiled["trade_type"],
+        "compiler": {"status": compiled["status"], "policy": compiled["policy"]},
+        "chart_facts": plan["chart_facts"], "entry_max": str(entry_max), "evidence": evidence,
+    }
+    return {
+        "schema": JOURNAL_SCHEMA, "mode": "REPLAY", "replay_id": _hash(normalized)[:32],
+        "stage": "PREPARED", "production_writes": False, "broker_actions": False,
+        "plan": normalized, "events": [], "replay_state": {"entry": "NOT_EVALUATED"},
+        "warnings": ["REPLAY GATE ONLY: entry price gate; no ticket, fill, or validated stop."],
+    }
+
+
 def prepare(plan: Any) -> dict[str, Any]:
-    plan = _keys(plan, PLAN_KEYS, "plan")
-    required = PLAN_KEYS - {"target"}
+    gate_only = isinstance(plan, dict) and "chart_facts" in plan
+    plan = _keys(plan, GATE_PLAN_KEYS if gate_only else PLAN_KEYS, "plan")
+    required = GATE_PLAN_KEYS if gate_only else PLAN_KEYS - {"target"}
     missing = required - set(plan)
     if missing:
         raise ReplayBlocked(f"plan is missing required keys: {sorted(missing)}")
@@ -206,7 +249,13 @@ def prepare(plan: Any) -> dict[str, Any]:
         raise ReplayBlocked("plan needs at least one cutoff_safe evidence item")
     evidence = [_evidence(x, cutoff=cutoff, role="cutoff_safe") for x in raw_evidence]
 
+    if gate_only:
+        return _prepare_gate_only(plan, market, symbol, cutoff, execution_date, source, approval, evidence)
+
     trade_type = _text(plan.get("trade_type"), "trade_type")
+    if trade_type == "BRICK_ZERO_DAY":
+        raise ReplayBlocked("BRICK_ZERO_DAY cannot use a full plan: execution_date follows the cutoff, so its "
+                            "buy-candle low is unknown; use a gate-only chart_facts plan")
     basis_level = _text(plan.get("basis_level"), "basis_level")
     basis_evidence = _text(plan.get("basis_evidence"), "basis_evidence")
     stop = _stop_selector().select(trade_type, basis_level, basis_evidence)
@@ -310,7 +359,8 @@ def advance(journal: Any, event: Any) -> dict[str, Any]:
         raise ReplayBlocked("event replay_id does not match journal")
     stage = event.get("stage")
     current = journal.get("stage")
-    expected = "OPEN" if current == "PREPARED" else "CLOSE" if current == "OPEN_REVEALED" else None
+    gate_only = journal["plan"].get("gate_only") is True
+    expected = "OPEN" if current == "PREPARED" else "CLOSE" if current == "OPEN_REVEALED" and not gate_only else None
     if stage != expected:
         raise ReplayBlocked(f"next event must be {expected!r}; got {stage!r} from journal stage {current!r}")
     allowed = OPEN_EVENT_KEYS if stage == "OPEN" else CLOSE_EVENT_KEYS
@@ -340,6 +390,12 @@ def advance(journal: Any, event: Any) -> dict[str, Any]:
             raise ReplayBlocked("event.bid must be <= event.ask")
         if kind == "OHLC_OPEN_PROXY" and not (bid == ask == opened):
             raise ReplayBlocked("OHLC_OPEN_PROXY requires bid == ask == open and is labelled approximate")
+        if gate_only:
+            updated["replay_state"]["entry"] = ("PRICE_ELIGIBLE_STOP_PENDING" if ask <= Decimal(plan["entry_max"])
+                                                else "BLOCKED_BY_PRICE")
+            updated["stage"] = "OPEN_REVEALED"
+            updated["events"].append(recorded)
+            return updated
         limit = Decimal(plan["entry_max"] if plan["execution_mode"] == "MARKETABLE_LIMIT"
                         else plan["entry_planned"])
         eligible = ask <= limit if plan["execution_mode"] == "MARKETABLE_LIMIT" else ask > limit

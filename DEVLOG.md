@@ -1,5 +1,15 @@
 # DEVLOG
 
+## 2026-10-30 · 交易策略编译器重写
+- 用合计 221 行的显式实现替换被否的草稿：只收可观察事实，拒绝 `trade_type` / `basis_kind` / `activation` / `broker_mode` / `template_id`，首个失败项给出单一稳定阻断码。
+- 砖：`SIGNAL_CLOSE` 用买入 K 低点；`NEXT_OPEN` 无确认 K 时 `ENTRY_GATE_ONLY`；确认 K / 底分型可供止损，等价位互证，不等即 `BASIS_CONFLICT`。
+- 决策：`zge-stop-v1` 不改，砖基准只能标 `ENTRY_CANDLE_LOW`，确认 K 价位不冒用，输出 `STOP_BASIS_ONLY` 且无 `stop_semantics`。
+- replay 增加 gate-only 计划：冻结 `entry_max`，OPEN 只给 `BLOCKED_BY_PRICE` / `PRICE_ELIGIBLE_STOP_PENDING`，之后拒绝 CLOSE。
+- `stop_template.py` 只保留砖退出规则的出处澄清文案；正常起草先走编译器；砖结果输出 `course_provenance`，区分 20260220 与 20260329，争议的时间/状态退出仍是人工非价格监控。
+- gate-only 冻结计划保存 `chart_facts` 与编译器 status / policy，`replay_id` 绑定分类证据；replay 完整计划拒绝 `BRICK_ZERO_DAY`，不能绕过编译器。
+- 编译器拒绝不存在的日期，但不做交易日历：下一观察交易日由 replay 证据 / 外层流程确认。
+- 下一步：决定确认 K 止损是否要新策略版本。
+
 ## 2026-10-30 · 砖 0 日入场时点语义更正（仅文档）
 - 依据 2026-02-20 第 18 节锚点 5144 / 5167 / 5179 更正：`BRICK_ZERO_DAY` 是首红砖信号状态，不是只能当日入场；可信号日尾盘或次一交易日早盘入场，早盘不追。约 +2% 属人工判断，+4% 及以上跳过，量比不是硬条件。
 - 删除 playbook 的“无成熟砖新入场类型”一句；执行与 replay 文档写明次日早盘 `entry_max` 须在开盘前冻结、超过即不追且不得上调，执行端不自行推导跳空百分比。

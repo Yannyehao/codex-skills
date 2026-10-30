@@ -25,4 +25,6 @@
 - 安装成功不代表所有产品均支持本地 Skill；此安装目标为本机 Codex。
 
 ## 状态
+交易策略编译器（`trade_policy_core.py`）：只收可观察事实，判定六种类型与唯一止损基准；砖次日开盘可 gate-only。确认 K 止损尚无 `zge-stop-v1` 诚实标签，只输出 `STOP_BASIS_ONLY`，不能生成交易单。
+
 已完成：ste-fr、lexicon-ingest、market-review 与 trade-execution 均纳入统一维护。market-review 以“当日全集 + 完整活跃机会 + 状态变化 + 月度全表”为两市复盘边界；交易单只选择一个精确 `trade_type`，由 `zge-stop-v1` 唯一生成止损依据、触发方式和状态/时间退出。当前六类为 K 线 B1、白线超短 B1、黄线波段 B1、新鲜 B2、已上涨回调 B2、砖 0 日；松紧环境不再参与止损选择。trade-execution 的 live lane 只处理已落库、已批准、带统一策略标记且语义匹配的交易单，阻止把收盘确认翻译成盘中硬止损；独立 replay lane 不读生产服务，以 cutoff → 单日 open → 单日 close 三阶段模拟历史执行并只增不改地输出可审计 JSON journal，v1 不延伸到后续 session。无标记旧单只能做终态历史复盘，不能重新进入执行。旧 us-market-review 已收窄为只能显式调用的无逻辑兼容别名。官方校验、契约测试、安装副本比对和本机配置保留是发布门禁。
