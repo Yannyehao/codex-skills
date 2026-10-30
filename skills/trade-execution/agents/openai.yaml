@@ -1,4 +1,4 @@
 interface:
   display_name: "交易单执行与持仓"
-  short_description: "按已批准交易单核对下单、成交、撤单与持仓管理"
-  default_prompt: "Use $trade-execution to check an approved ticket before I place the order."
+  short_description: "核对已批准交易单，或做无前视历史执行复盘"
+  default_prompt: "Use $trade-execution to check an approved live ticket or run a clearly isolated historical replay."

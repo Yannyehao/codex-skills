@@ -1,13 +1,21 @@
 ---
 name: trade-execution
-description: Guide Yehao through executing an already-persisted, human-approved trade ticket and recording the resulting order, fill, cancel, and position facts for U.S. or A-share trades through the configured lifecycle service. Trigger on 执行/怎么下单 for an existing ticket, an order, fill, or cancel screenshot, stop/target/holding management, "成交了/撤了", or a scale-up question. Never submits to a broker and never builds an executable plan from chat; market reviews, new ideas, and drafting belong to market-review.
+description: Guide Yehao through live execution of an already-persisted, human-approved U.S. or A-share trade ticket, or run an explicitly non-live historical execution replay with staged cutoff-safe evidence. Trigger on 执行/怎么下单 for an existing ticket, order/fill/cancel evidence, stop/target/holding management, "成交了/撤了", or requests to 模拟/复盘当时怎么下单. Never submits to a broker; live drafting belongs to market-review, and replay can never become a real ticket, order, fill, or position.
 ---
 
 # Trade execution
 
 This skill checks and records. It never clicks a broker's submit, cancel, or modify button, automates a broker, or creates an executable plan from chat. The human places every order. Chat is not the ledger: the local lifecycle service (`python -m zradar.trade_lifecycle`) is the single source of truth, and Notion is only a projection of it.
 
-## Setup and fail-closed loading
+## Choose the mode first
+
+- **Live execution / live position management**: use the service-backed workflow below. It requires an already-persisted, human-approved trade ticket and broker evidence; live mode never builds an executable plan from chat.
+- **Historical execution replay**: only when the user explicitly asks to simulate or practise a past decision. Read [references/replay.md](references/replay.md) and use `scripts/replay_execution.py`. Do not read the lifecycle database, do not call any service `apply`, and do not reinterpret replay approval as live approval. Replay may construct a non-executable scenario from cutoff-safe evidence because every artifact is labelled `REPLAY`, carries `production_writes: false` and `broker_actions: false`, and cannot enter the live workflow.
+- **Post-trade review of a recorded trade**: use the dedicated terminal-state mode below; it is neither replay nor live entry.
+
+If the request mixes replay and a real order, stop and separate them. A replay never authorizes a broker action. A later live attempt starts over with `$market-review` on an explicit 固化, a service-persisted ticket, and a new human approval.
+
+## Live setup and fail-closed loading
 
 Read `config.local.json` beside this file (`config.example.json` shows the shape; real values stay local). Load the ticket only with the service's read-only `state` and `audit` commands, using the exact commands in [references/service-cli.md](references/service-cli.md). Feed their unedited output to `scripts/audit_ticket.py`. Stop and say exactly what is missing if the service is unavailable, the ticket is absent, or any approval-gate condition fails. Never reconstruct a ticket from chat, a screenshot, a review paragraph, or Notion, and never rename fields to fit an old export: a file that is not service output is rejected.
 
@@ -30,6 +38,14 @@ Read [references/ticket-contract.md](references/ticket-contract.md) for the raw 
 7. **Verify.** Read `state` and `audit` back and report the stored state, order status, open quantity, and audit result, not what you intended to write.
 
 Allowed `apply` operations: `submit_order`, `attach_stop`, `amend_order`, `cancel_order`, `expire_order`, `reject_order`, `record_fill`, `record_exit_fill`, `expire_ticket`, and `cancel_ticket` on the human's explicit instruction. Never `approve`, `create_draft`, or `migrate`; `mark_reviewed` only through post-trade review mode below (it is not in `check-args`). Approval is the human's own act with the `terms_sha256` they reviewed, in the service; reading `state.approval` is evidence, never an approval input, and this skill never infers or performs it. Drafting is `$market-review` on an explicit 固化.
+
+## Historical replay mode
+
+Read [references/replay.md](references/replay.md) and keep the files outside production outputs. Build and obtain explicit human approval for a `REPLAY` scenario using only evidence whose `last_bar_date` is at or before `decision_cutoff`; this approval covers the simulation terms only. Run `prepare`, then reveal exactly one `OPEN` event, then one `CLOSE` event. Never combine stages in one input, point the open event at a full end-of-day bar, or summarize later prices before their stage is admitted.
+
+The replay helper loads `zge-stop-v1` from the sibling `market-review` skill, so one exact `canonical_trade_type` determines the stop. It blocks if the selector is absent. In particular, `B1_YELLOW_LINE_SWING` remains `CLOSE_CONFIRM`: an intraday move below yellow is not a stop; only the regular-session close decides. `BRICK_ZERO_DAY` alone uses `INTRADAY_HARD`, and a daily low can prove only that it triggered, never that a stop-limit filled.
+
+Report every result as hypothetical with its evidence limitations. The final journal may be passed to `trade-case-logger` as evidence, but this skill does not write the case, production ledger, lifecycle service, or broker. To place a real order, discard the replay path and return to live setup from a newly drafted and approved service ticket.
 
 ## Post-trade review mode
 
