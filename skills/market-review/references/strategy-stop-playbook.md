@@ -15,7 +15,18 @@ Regime (`TIGHT` / `LOOSE`) and position state are not stop inputs. Regime affect
 | `B2_RISEN_PULLBACK` | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` | `HUMAN_ONLY_ALERT` | `B2_RISEN_STRUCTURE_HOLD` (no fresh two-session clock; hold while the prior N low is intact and there is no S1) | 2026-01-21 |
 | `BRICK_ZERO_DAY` | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` | `LIVE_STOP_LIMIT` (disaster stop) | `BRICK_NEXT_OPEN_NO_EXPLOSION` (no lift at the next open, checked 9:33 / 9:37, exits), `BRICK_RED_TO_GREEN` | 2026-02-20 (entry-K low, two-bar gamble), 2026-03-29 (brick state, next open) |
 
-Every type also cites 2026-04-22, the close-versus-intraday meta-rule. There is no mature-brick new-entry type.
+Every type also cites 2026-04-22, the close-versus-intraday meta-rule.
+
+## `BRICK_ZERO_DAY` entry timing
+
+`BRICK_ZERO_DAY` names the first-red-brick **signal state**; it is not a rule that entry must happen on the signal day. There is one type and one stop for both timings, per 2026-02-20 section 18 (anchors 5144, 5167, 5179):
+
+- Entry may be near the signal-day close or on the next trading-day morning. A next-morning entry must not chase.
+- A next-morning gap of about +2% is human judgment, neither an automatic accept nor an automatic reject. +4% or more is skip / no chase.
+- Volume ratio is not a hard condition and gates nothing here.
+- A next-morning entry freezes `entry_max` before the open, chosen by the human under the bounds above. Execution honors that persisted ceiling and derives no gap percentage of its own.
+
+The stop basis stays the buy-candle low. For a next-morning entry that candle is still forming at the open, so its low is not knowable before entry. The prior signal candle's low is a different level and never substitutes for it. The helper and the draft require a real `basis_level` and have no deferred-level path, so a complete next-morning ticket cannot be drafted yet: treat `basis_level` as missing, ask, and write nothing. This playbook supplies no replacement stop for that gap.
 
 ## Activation semantics
 

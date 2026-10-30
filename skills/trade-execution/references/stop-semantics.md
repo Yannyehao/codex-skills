@@ -34,6 +34,8 @@ Drafts from the helper start `basis.evidence` with exactly `canonical_trade_type
 | `B2_RISEN_PULLBACK` | `PRIOR_B1_N_LOW` | `CLOSE_CONFIRM` |
 | `BRICK_ZERO_DAY` | `ENTRY_CANDLE_LOW` | `INTRADAY_HARD` |
 
+For `BRICK_ZERO_DAY`, `ENTRY_CANDLE_LOW` is the buy candle's low, not the signal candle's. On a next-morning entry that low is unknowable before the open, and the ticket has no deferred-level field. A level persisted before that candle exists cannot be this basis even though the audit, which sees only the persisted text, would pass it: do not substitute the prior signal candle's low, and BLOCK or defer rather than show a stop this ticket cannot support.
+
 `B1`, `B2`, `BRICK` alone and `COMPOSITE` are unknown and block. Every ticket entering `pre-submit` or `protective` must carry exactly one `canonical_trade_type=<TYPE>` and exactly one `policy=zge-stop-v1` marker in `basis.evidence`; a missing marker BLOCKS execution. Terminal `post-trade-review` and `historical-post-trade-review` have separate paths, need no stop semantics or marker, and historical post-trade review is unchanged. The holding/time rules (and the non-price `PROFIT_TO_LOSS_INTRADAY`) live in the ticket's `trigger_text`, are judged by the human, and are never stop prices or broker orders.
 
 ## Activation: when the stop acts

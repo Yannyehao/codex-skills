@@ -108,6 +108,31 @@ unsupported execution mode, stop/entry inconsistency, or risk above the simulati
 above the limit, and a later daily low touching the limit is labelled a hypothetical fill whose
 sequence and actual execution are unproven.
 
+## `BRICK_ZERO_DAY` entry timing
+
+`BRICK_ZERO_DAY` is the first-red-brick signal state, not a same-day entry rule. Entry may be near
+the signal-day close or on the next trading-day morning (`market-review`'s
+`strategy-stop-playbook.md` owns the rule). Version 1 has no near-close stage, and `prepare` requires
+`execution_date` after `decision_cutoff`, so a signal-day near-close entry cannot be replayed here.
+
+A next-morning exercise would have the signal day as `decision_cutoff` and the next trading day as
+`execution_date`. These are its semantics, not a run current v1 can complete:
+
+- `entry_max` is frozen in the plan before `OPEN`. An ask above it is `BLOCKED_BY_PRICE` / no chase.
+  It may not be raised; editing it after `prepare` fails the `replay_id` check.
+- The helper honors the persisted `entry_max`. It derives no gap percentage and reads no volume
+  ratio; those judgments end when `entry_max` is frozen.
+- The course's stop is the buy-candle low, and here the buy candle is the execution session itself.
+  Its low is not knowable at `OPEN`, so the only result such a next-morning exercise is allowed to
+  claim is the entry-price gate. It must not claim it validated or attached a dynamic stop.
+- Current v1 cannot emit an honest `BRICK_ZERO_DAY` journal for it: `prepare` needs a `basis_level`
+  and a `stop_limit` below it, and has no gate-only path. Block or defer until a
+  gate-only/deferred-stop path exists. Do not substitute the prior signal candle's low, a
+  placeholder, or a low learned from a later stage. The helper checks only the number's format and
+  ordering, so `prepare` accepting a level proves nothing about where it came from.
+
+The one-session limit still applies: nothing here extends replay past that session's `CLOSE`.
+
 ## Reveal the open
 
 Create a small stage-limited evidence JSON with exactly these keys:
@@ -175,5 +200,6 @@ hypothetical holding beyond the recorded close.
 
 Block rather than repair when a stage is skipped, a plan is edited after prepare, an evidence hash
 does not match, an open snapshot contains end-of-day fields, the canonical selector is missing, a
-simulation term is absent, or the output path is not a new `.json` file. Never fall back from replay
+simulation term is absent, a next-morning `BRICK_ZERO_DAY` stop level does not exist yet, or the
+output path is not a new `.json` file. Never fall back from replay
 to the live service, overwrite an artifact, or make replay approval look like live approval.

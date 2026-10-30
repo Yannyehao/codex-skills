@@ -8,6 +8,10 @@ Terms are the service's (`zradar.trade_lifecycle`). The ticket's persisted field
 - **`PASSIVE_LIMIT`** (pullback, B1, B2, white or yellow line): a passive limit at `entry_planned` (`entry_max` equals it). If the limit is at or above the ask it would fill at once and is no longer the approved structure entry; stop and discuss.
 - An arrow, signal, or review verdict alone never means execute. A missing or unrecognized mode blocks; never infer it from the setup name or from chat. The service's mode hint is a hint only.
 
+## `BRICK_ZERO_DAY` entry timing
+
+`BRICK_ZERO_DAY` is the first-red-brick signal state, not a same-day entry rule; the approved entry may be near the signal-day close or on the next trading-day morning. A next-morning ticket has `entry_max` frozen before the open. An ask above it blocks as no chase (`BLOCKED_BY_PRICE` in replay), and `entry_max` may not be raised. Execution honors the persisted `entry_max`: it derives no gap percentage and adds no volume-ratio gate. The stop for this case is limited by [stop-semantics.md](stop-semantics.md).
+
 ## Entry form and numbers
 
 Show the fields the way a broker form asks for them: side, symbol, order type (`LIMIT`), quantity, limit price, time in force. The audit prints them from the ticket: `MARKETABLE_LIMIT` shows `entry_max` as the ceiling (the human may set a lower limit, never a higher one); `PASSIVE_LIMIT` shows `entry_planned`. Time in force comes from the ticket's `order_template`; confirm it on the form. The order quantity is at most the approved `quantity`; the human may place fewer, never more, and the fills record what actually happened.
