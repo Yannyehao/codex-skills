@@ -1,6 +1,6 @@
 # A-share profile
 
-Uses the same ledger and lifecycle as [review-contract.md](review-contract.md); only the market facts below differ. Config section: `profiles.a`.
+Uses the same ledger and lifecycle as [review-contract.md](review-contract.md); only the market facts below differ. Uses `lifecycle_service`; there is no A-specific config section.
 
 ## Session gate (manual)
 
@@ -10,7 +10,7 @@ No bundled artifact audit exists for this profile. Establish the review date you
 - The latest closed session is the most recent trading day whose close (15:00 China time) has passed and whose data source shows a finished daily bar. A source still showing intraday data for today is partial: use the prior session or say the data is not final.
 - State the review date and the data source's own last-bar date. If they differ, stop and expose both.
 
-Fresh candidates, chart evidence, and the ledger come from the user's configured sources. If a source is unavailable, name it; do not reuse an old export as complete.
+Fresh candidates and chart evidence come from the user's sources; status and history come only from the SQLite ledger. The U.S. review workbench does not apply: after 写回, use the `write-review` output and `manual_review queue --todo-only` for the receipt. If a source is unavailable, name it; do not reuse an old export as complete.
 
 ## Chart verdict versus execution facts
 

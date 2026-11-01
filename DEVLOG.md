@@ -1,5 +1,12 @@
 # DEVLOG
 
+## 2026-10-31 · 自然复盘写回与案例 Skill
+- market-review 的 `写回` 改为 prepare-review → 展示封包 → write-review；封包不含案例、计划、交易单或委托。普通评语只留审计。
+- 决策：只移植 zAI 工作区的自然流程改动，不用其旧副本覆盖本仓库的 `zge-stop-v1` 与编译器内容。
+- 新增 trade-case-logger：去除本机解释器路径，复用 market-review 的 `lifecycle_service`，不新增配置；默认安装清单已加入。
+- 第三轮复核：状态与历史只认 SQLite；删除 market-review 配置里的 Notion 目标与空的 `profiles.a`；按 zAI 工作树核对命令，月度改用 `lifecycle_query month`，回执改用 `review_workbench`（`review_status` 没有 CLI）；`当前状态` / `重点关注` 不再当账本状态。
+- 下一步：zAI 工作流分支合入后，在新聊天实测两个 Skill 的触发边界。
+
 ## 2026-10-30 · 交易策略编译器重写
 - 用合计 221 行的显式实现替换被否的草稿：只收可观察事实，拒绝 `trade_type` / `basis_kind` / `activation` / `broker_mode` / `template_id`，首个失败项给出单一稳定阻断码。
 - 砖：`SIGNAL_CLOSE` 用买入 K 低点；`NEXT_OPEN` 无确认 K 时 `ENTRY_GATE_ONLY`；确认 K / 底分型可供止损，等价位互证，不等即 `BASIS_CONFLICT`。

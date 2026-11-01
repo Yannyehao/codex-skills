@@ -8,6 +8,7 @@
 | [lexicon-ingest](skills/lexicon-ingest/SKILL.md) | 将明确批准的英法原文按词元与实际出现次数写入词库 | `$lexicon-ingest` 或“把刚才的词入库” |
 | [market-review](skills/market-review/SKILL.md) | 美股 / A股全量复盘：当日候选、活跃机会、状态变化与月度台账 | `$market-review`、“美股复盘”或“A股复盘” |
 | [trade-execution](skills/trade-execution/SKILL.md) | 实盘从已批准交易单校验并记录委托事实；历史 replay 按截止日、开盘、收盘分阶段模拟且零生产写入 | `$trade-execution`、“怎么下单”、“成交了”、“模拟当时怎么做”或持仓管理 |
+| [trade-case-logger](skills/trade-case-logger/SKILL.md) | 用户明确要留案例时，把某票某日的证据与注释写入账本；普通复盘评语不算授权 | `$trade-case-logger` 或“这个留成案例” |
 
 ## 安装与使用
 
@@ -23,7 +24,9 @@ cd codex-skills
 
 `ste-fr` 持续保持三语模式，直到 `/stop-ste-fr`。明确批准入库时，委托 `lexicon-ingest`；没有批准就不写库。
 
-`market-review` 与 `trade-execution` 首次使用时，分别把安装目录内的 `config.example.json` 复制为 `config.local.json`，填写本机 zAI 项目、候选数据库和交易生命周期服务目标。该配置不会提交，重复安装会保留。复盘默认只读；生成交易单时只选择一个精确交易类型，`zge-stop-v1` 自动给出唯一的止损依据、触发方式和状态/时间退出。执行 Skill 只能读取已落库、已人工批准且统一策略标记与止损语义匹配的交易单，不代替用户操作券商，也不会把收盘确认止损翻译成盘中 STOP_LIMIT。
+`market-review` 与 `trade-execution` 首次使用时，分别把安装目录内的 `config.example.json` 复制为 `config.local.json`，填写本机 zAI 项目和交易生命周期服务目标；状态与历史只来自其中的 SQLite 账本，Notion 已退役、不作配置。该配置不会提交，重复安装会保留。复盘默认只读；生成交易单时只选择一个精确交易类型，`zge-stop-v1` 自动给出唯一的止损依据、触发方式和状态/时间退出。执行 Skill 只能读取已落库、已人工批准且统一策略标记与止损语义匹配的交易单，不代替用户操作券商，也不会把收盘确认止损翻译成盘中 STOP_LIMIT。
+
+复盘 `写回` 由 agent 从对话恢复日期、图和原话，经只读的 `prepare-review` 封包并展示；只有明确说 `写回` 才用 `write-review` 写入决定；它不保存案例、计划、交易单或委托。案例走 `trade-case-logger`，需要针对具体票和日期的明确授权，并复用 market-review 本机配置的 `lifecycle_service`。
 
 历史执行练兵走 trade-execution 的 replay lane，不需要也不读取本机服务配置：先用截止日安全证据生成明确标为 `REPLAY` 的模拟条款，再依次揭示一个交易日的开盘与收盘事件。replay 直接复用 market-review 的 `zge-stop-v1` 选择器，只用 exclusive create 新建 `.json` journal；它不覆盖文件、不调用 lifecycle `apply`、不写生产 SQLite，也不形成真实订单、成交或持仓。v1 不处理下一交易日和多日持仓。真实下单仍必须重新走固化、服务内人工批准和 live 审计。
 

@@ -20,8 +20,17 @@ MR = SKILLS / "market-review"
 
 # Matches a drive path, a user-profile path, or a home path: machine-specific content.
 MACHINE_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:[\\/]|/Users/|/home/|\\\\[A-Za-z0-9_.-]+\\")
-PLACEHOLDER = re.compile(r"^(PATH_TO_[A-Z_]+|NOTION_DATABASE_URL|collection://[A-Z_]*ID|"
-                         r"(review|human|import):NAME)$")
+PLACEHOLDER = re.compile(r"^(PATH_TO_[A-Z_]+|(review|human|import):NAME)$")
+# Concrete identifiers that would mean a real case, transcript, or authorization leaked into a public example.
+PRIVATE_DETAIL = re.compile(r"(?<!\d)\d{6}(?!\d)|(?<!\d)20\d{6}(?!\d)|\b[0-9a-f]{64}\b|"
+                            r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b|"
+                            r"\.jsonl\b|rollout-|\bsessions[\\/]|yehao|bbboy", re.IGNORECASE)
+# Verified against the zAI CLI parsers; a new citation must be verified there first.
+ZAI_COMMANDS = {"opportunity_episode_flow": {"cards", "audit", "hierarchy"},
+                "lifecycle_query": {"month", "week", "symbol", "health"},
+                "manual_review": {"prepare-review", "write-review", "queue", "history"},
+                "opportunity_ledger": {"add-manual-observation", "save-case", "list-cases"},
+                "trade_lifecycle": {"list", "state", "apply"}}
 # Canonical-grammar facet names belong to the service contract, never to a skill file.
 FACETS = ("yellow_white_relation_slope", "price_location", "rising_n", "macd_zero_environment",
           "post_rise_pullback_days_amplitude", "volume_contraction_time_for_space",
@@ -52,8 +61,11 @@ class CanonicalCards(unittest.TestCase):
     def test_routes_to_lifecycle_service_cards_as_the_canonical_representation(self) -> None:
         self.assertAll(self.contract, "Canonical representation: lifecycle cards",
                        "canonical record", "opportunity_episode_flow cards",
-                       "projections of it", "the service wins")
-        self.assertAll(self.skill, "lifecycle cards", "`cards`", "`audit`", "`hierarchy`")
+                       "human status stored in that SQLite ledger is authoritative over a stale machine conclusion",
+                       "Notion pages and projections are only views, never a source of status",
+                       "the service wins")
+        self.assertNotIn("human ledger are only views", self.contract)
+        self.assertAll(self.skill, "lifecycle cards")
         self.assertIn("never a reason to reconstruct one from a screenshot or from chat", self.contract)
 
     def test_scanner_is_high_recall_or_and_shows_fresh_raw_plus_every_active_episode(self) -> None:
@@ -96,8 +108,41 @@ class CanonicalCards(unittest.TestCase):
                        "stays `WAIT`, never promoted", "case-derived induction")
 
     def test_review_runs_only_read_only_service_commands(self) -> None:
-        self.assertAll(self.skill, "read-only `list`, `state`, and the episode flow's `cards`, `audit`, and `hierarchy`")
-        self.assertAll(self.contract, "the service's `list`, `state`, `cards`, `audit`, `hierarchy` only")
+        self.assertAll(self.skill, 'the read-only ones listed under "Read-only ledger commands"')
+        self.assertAll(self.contract, "## Read-only ledger commands", "only the commands under \"Read-only ledger commands\"",
+                       "lifecycle_query month", "manual_review queue", "history --db", "trade_lifecycle list",
+                       "lifecycle.review_workbench")
+
+    def test_prepare_review_is_the_only_pre_writeback_exception(self) -> None:
+        self.assertAll(self.skill, "before 写回, `manual_review prepare-review` is also allowed",
+                       "`manual_review write-review` stays forbidden until the user explicitly says 写回")
+        self.assertAll(self.contract, "`manual_review prepare-review` is also allowed before 写回",
+                       "`write-review` needs the explicit 写回")
+        section = self.contract.split("## Read-only ledger commands")[1].split("## Session gate")[0]
+        for write in ("write-review", "save-case", "create_draft", "apply", "record "):
+            self.assertNotIn(write, section)
+
+    def test_sqlite_is_the_only_status_source(self) -> None:
+        for path in skill_text_files(MR):
+            if path.name.startswith("test_"):
+                continue
+            text = path.read_text(encoding="utf-8")
+            for stale in ("candidate_database_url", "candidate_data_source_url", "当前状态",
+                          "candidate ledger", "full pagination", "review_status"):
+                self.assertNotIn(stale, text, path.name)
+        self.assertAll(self.skill, "`lifecycle_service.database` is the only status and history source")
+        config = json.loads((MR / "config.example.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(config["profiles"]), {"us"})
+        self.assertEqual(set(config["profiles"]["us"]), {"project_root", "viewpoint_symbols"})
+
+    def test_cited_zai_commands_were_verified(self) -> None:
+        cited = re.compile(r"(?:zradar\.|`)(opportunity_episode_flow|lifecycle_query|manual_review|opportunity_ledger|trade_lifecycle) ([a-z-]+)")
+        for skill in ("market-review", "trade-case-logger"):
+            for path in skill_text_files(SKILLS / skill):
+                if path.suffix != ".md":
+                    continue
+                for module, command in cited.findall(path.read_text(encoding="utf-8")):
+                    self.assertIn(command, ZAI_COMMANDS[module], f"{path.name}: {module} {command}")
 
 
 class StopSemanticsDraftContract(unittest.TestCase):
@@ -222,6 +267,38 @@ class ThinProfiles(unittest.TestCase):
         self.assertTrue((MR / "references" / "a-profile.md").is_file())
 
 
+class NaturalWriteback(unittest.TestCase):
+    def test_writeback_uses_a_sealed_packet_and_never_saves_cases_or_tickets(self) -> None:
+        skill = read(MR / "SKILL.md")
+        for fragment in ("prepare-review", "write-review", "the user never fills JSON",
+                         "never creates a case annotation, collection membership, plan, ticket, or order",
+                         "ask only when two materially different trading meanings remain",
+                         "Ordinary review comments stay in the audit trail"):
+            self.assertIn(fragment, skill)
+
+    def test_case_saving_needs_explicit_scoped_authorization(self) -> None:
+        skill = read(SKILLS / "trade-case-logger" / "SKILL.md")
+        for fragment in ("授权范围就是说到的那只票、那一日", "只留在复盘审计里：不写案例", "action: \"SAVE_CASE\"",
+                         "../market-review/config.local.json", "`production_change` 恒为 `none`"):
+            self.assertIn(fragment, skill)
+
+    def test_case_logger_ships_only_public_files_and_installs_by_default(self) -> None:
+        skill = SKILLS / "trade-case-logger"
+        for path in skill_text_files(skill):
+            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                self.assertIsNone(MACHINE_PATH.search(line), f"{path.name}:{number}: {line.strip()}")
+                self.assertIsNone(PRIVATE_DETAIL.search(line), f"{path.name}:{number}: {line.strip()}")
+        self.assertIn("'trade-case-logger'", (REPO / "scripts" / "install.ps1").read_text(encoding="utf-8"))
+
+
+class PrivateDetailGuard(unittest.TestCase):
+    def test_guard_catches_realistic_leaks_and_allows_placeholders(self) -> None:
+        for leak in ("--symbol 600886", "--date 20260923", "source_sha256: " + "a" * 64,
+                     "rollout-abc", "transcript.jsonl", "12345678-1234-1234-1234-123456789abc"):
+            self.assertIsNotNone(PRIVATE_DETAIL.search(leak), leak)
+        self.assertIsNone(PRIVATE_DETAIL.search('<SYMBOL> <YYYYMMDD> "<64hex>" chat|transcript'))
+
+
 class LegacyAlias(unittest.TestCase):
     def test_us_market_review_is_an_explicit_only_alias_with_no_logic_of_its_own(self) -> None:
         alias = SKILLS / "us-market-review"
@@ -257,7 +334,7 @@ class PublicSafeConfig(unittest.TestCase):
         walk(json.loads((MR / "config.example.json").read_text(encoding="utf-8")))
 
     def test_no_machine_specific_path_in_any_skill_file(self) -> None:
-        for skill in ("market-review", "trade-execution", "us-market-review", "ste-fr", "lexicon-ingest"):
+        for skill in ("market-review", "trade-execution", "trade-case-logger", "us-market-review", "ste-fr", "lexicon-ingest"):
             for path in skill_text_files(SKILLS / skill):
                 if path.name.startswith("test_"):
                     continue

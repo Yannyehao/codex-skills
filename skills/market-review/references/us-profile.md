@@ -2,7 +2,13 @@
 
 Adds U.S.-specific facts to [review-contract.md](review-contract.md). Config section: `profiles.us`.
 
+## Writeback
+
+Discuss, then `manual_review prepare-review` (read-only, sealed packet), show it, and only on 写回 run `manual_review write-review`. Details are in SKILL.md. The user never edits the packet.
+
 ## Artifact gate
+
+Status comes from the SQLite ledger and the `status` receipt of the read-only `zradar.lifecycle.review_workbench`: tonight's human decisions, next exchange-calendar dates, and system debt are reported separately. A complete discovery lane's machine outcomes are audit evidence, not user todos and not debt. Cases never affect completion, and the user does not manage audit sheets.
 
 The bundled `scripts/audit_review.py --profile us` applies the shared session gate to the zAI nightly bundle. A date's bundle is complete only if all of these exist and agree on the date:
 
@@ -16,7 +22,7 @@ The audit proves integrity, not interpretation: still open the pixels.
 
 ## Ledger
 
-The candidate ledger is the configured live database for the current calendar month, queried with full pagination. A symbol selected more than once keeps all its dates.
+The ledger is `lifecycle_service.database`; read it with the commands in the contract. A symbol selected more than once keeps all its dates.
 
 ## Viewpoint-account candidates (XDV / BNC)
 

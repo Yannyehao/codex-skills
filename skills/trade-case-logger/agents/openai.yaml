@@ -1,0 +1,4 @@
+interface:
+  display_name: "交易案例标注"
+  short_description: "经明确授权，把某票某日留成带截止证据的案例"
+  default_prompt: "Use $trade-case-logger to save the case I explicitly asked to keep."
