@@ -25,14 +25,18 @@ description: 用户真实表达要把某票某日留成案例时，一次操作�
    - `user_evidence`：用户给的原图/原话出处；
    - `cutoff_safe`：按 `target_date` 截止重画/重导出的图或数据，声明 `last_bar_date`，`as_of_safe=true`。
      同一个文件不能同时当两类。
-3. **`production_change` 恒为 `none`。** 标注永不自动改阈值、不改战法、不改产线。
+3. **用户原图是案例主图，截止图是审计证据，两者不互相顶替。** 有用户 / 通达信原图时，它（`user_evidence` 的图片行）就是案例库读者看到的主图；
+   `as_of_safe=false` 只表示它不能当截止日证据，不影响它当主图。`cutoff_safe` 图只进折叠的审计证据，不算案例图。
+   原图从对话附件、上传目录、案例目录和 transcript 自己恢复，不让用户填表。真恢复不出来时：`user_evidence` 放用户原话文本（`kind: user_quote`），
+   在 `--note` 里写明「原图未保存」并在汇报里说出来；**不得**把重画图、截止图登记成 `user_evidence` 去凑图。案例库会如实显示「原图尚未保存」。
+4. **`production_change` 恒为 `none`。** 标注永不自动改阈值、不改战法、不改产线。
    「能力缺口」只是**假设**（`capability_gap`），改判据由用户另行决定。
-4. 必填：`user_verdict`（用户的裁决，原话为准）、`case_type`、`capability_gap`（没有就明写 `none`）、
+5. 必填：`user_verdict`（用户的裁决，原话为准）、`case_type`、`capability_gap`（没有就明写 `none`）、
    `knowledge_class`（这条知识的证据档次，如 原话 / 推断）。
-5. 锚点：优先链接已有 observation / episode（按 market+symbol+target_date 自动找当日 current run 的信号，
+6. 锚点：优先链接已有 observation / episode（按 market+symbol+target_date 自动找当日 current run 的信号，
    其次当日未终结的 episode）。扫描**没报**的案例，先 `add-manual-observation`（挂在专用 run 下，
    不进月度候选 / 动作队列 / 生命周期，只给案例一个事实锚）。
-6. 市场与代码：`--market US|A`；A 股代码 6 位数字（丢了前导零会补齐），美股 ticker 原样大写、不补零。
+7. 市场与代码：`--market US|A`；A 股代码 6 位数字（丢了前导零会补齐），美股 ticker 原样大写、不补零。
 
 ## 什么算授权
 
@@ -66,7 +70,7 @@ description: 用户真实表达要把某票某日留成案例时，一次操作�
    退出码：0 成功（同内容重跑返回同一 `annotation_id`，不新增）；3 = 被拒（原因在 JSON `error`，
    常见：缺证据 / 哈希不符 / 未来泄露 / 截图冒充 / production_change 非 none）；1 = 其他错误。
 5. 看案例视图：`<python> -X utf8 -m zradar.opportunity_ledger list-cases --db <db> [--market <US|A>] [--symbol <SYMBOL>]`。
-6. 汇报：annotation_id、链接到哪条 observation/episode、两类证据各是什么、被拒时的原因。
+6. 汇报：annotation_id、链接到哪条 observation/episode、两类证据各是什么、原图有没有存到（没有就明说缺原图）、被拒时的原因。
    **不要**顺手建议改阈值；缺口假设留在 `capability_gap` 里等用户裁决。
 
 ## 不做
