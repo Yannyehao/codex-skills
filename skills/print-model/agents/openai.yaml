@@ -1,0 +1,4 @@
+interface:
+  display_name: "3D 打印协作"
+  short_description: "从需求与参考模型到参数化建模、旋转预览、几何检查及试装导出"
+  default_prompt: "使用 $print-model 帮我制作或修改一个3D打印模型，给我看预览并先验证适合试装的版本。"

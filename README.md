@@ -4,6 +4,7 @@
 
 | Skill | 用途 | 调用 |
 |---|---|---|
+| [print-model](skills/print-model/SKILL.md) | 功能性3D打印件建模、预览、检查、试装和导出；可选项目Gallery | `$print-model` 或“帮我做/修改3D打印模型” |
 | [ste-fr](skills/ste-fr/SKILL.md) | 法语、英语、中文逐段对照的自然对话 | `$ste-fr` 或 `/ste-fr` |
 | [lexicon-ingest](skills/lexicon-ingest/SKILL.md) | 将明确批准的英法原文按词元与实际出现次数写入词库 | `$lexicon-ingest` 或“把刚才的词入库” |
 | [market-review](skills/market-review/SKILL.md) | 美股 / A股全量复盘：当日候选、活跃机会、状态变化与月度台账 | `$market-review`、“美股复盘”或“A股复盘” |
