@@ -1,5 +1,10 @@
 # DEVLOG
 
+## 2026-11-12: Lexicon highlight-aware ingestion
+- Added current review fields, explicit-highlight evidence mapping, context deduplication and metadata-only retries.
+- Preserved full-text counts, existing mastery/recall/date history; aligned entry identity with Language + Type + normalized Entry.
+- Validator and independent scenario dry-run passed; installed files hash-verified and local configuration preserved. No production data changes or historical backfill.
+
 ## 2026-11-11 · 3D打印协作Skill
 - 新增 print-model：自然语言需求、源模型检查、参数化建模、旋转预览、验证和试装导出。
 - 提供不覆盖既有目录的项目初始化器，以及网格闭合/绕向检查脚本；私有目录和Notion目标留在忽略配置。

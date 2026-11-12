@@ -2,7 +2,7 @@
 
 ## Lemmas and exclusions
 
-One main record per `(Language, Entry)`, regardless of part of speech. Keep contextual senses/parts of speech in the audit table without making duplicate main records.
+One main record per `(Language, Type, normalized Entry)`, regardless of part of speech. Word and Expression are distinct types; missing/ambiguous legacy Type must be resolved before creating or changing a matching record. Keep contextual senses/parts of speech in the audit table without making duplicate main records.
 
 Normalize inflections: English `is → be`, `problems → problem`, `minutes → minute`; French `est → être`, `fais → faire`, `laisse → laisser`, `suffit → suffire`. Normalize sentence-initial capitalization, preserving dictionary `I` in English.
 
@@ -41,3 +41,8 @@ If only lossy SQL text is available, fetch the page or faithful rows before muta
 - Preserve existing Status, especially Active. Upgrade to Active only with explicit evidence of active mastery, never from reading comprehension alone.
 - For uncertain existing words, preserve Status and annotate the new uncertain evidence in the batch audit/Source rather than overwriting historical mastery.
 - Do not overwrite existing meaning or part of speech merely to simplify an ingestion update. Store this batch's contextual interpretation in provenance; modify existing fields only when explicitly justified and authorized.
+
+
+## Intensive-study highlights
+
+Full-text token counts and the highlighted review subset are independent. Follow [highlight-sync.md](highlight-sync.md) for evidence, metadata-only retries and preservation of existing review fields. Ingestion is not a recall test and never schedules or records a review.

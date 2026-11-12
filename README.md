@@ -51,3 +51,5 @@ cd codex-skills
 - 历史 replay 必须用分阶段证据文件；开盘快照本身不得包含高低收量，结果始终保留 `production_writes: false` / `broker_actions: false`。
 - 交易类型必须精确，模糊的 `B1` / `B2` / `BRICK` 或组合判断不能生成交易单；止损模板不再由人自由拼装。搬砖的状态/时间退出不能伪装成价格止损，普通交易与历史导入交易分别通过对应的事后复盘门禁。
 - 提交前确认没有本机配置、令牌、原文批次或数据库审计。
+
+Lexicon intensive-study ingestion keeps full-text occurrence counts separate from the user-highlighted review subset. It preserves existing recall results and review dates; see the highlight-sync reference. Skill validation does not perform live vocabulary writes.
