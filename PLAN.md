@@ -27,6 +27,8 @@
 
 ## 状态
 
+华罗庚 FM 制作流程已加入可维护的本地 Skill。项目提示词、样片、用户裁决和本机目录随项目维护。
+
 新增 print-model：本地 AgentCAD/build123d、可旋转预览、几何与导出检查、试装迭代，以及可选 Notion Gallery。项目目录、解释器和数据库目标只在忽略配置中维护。切片通过与实物通过分开记录。
 交易策略编译器（`trade_policy_core.py`）：只收可观察事实，判定六种类型与唯一止损基准；砖次日开盘可 gate-only。确认 K 止损尚无 `zge-stop-v1` 诚实标签，只输出 `STOP_BASIS_ONLY`，不能生成交易单。
 

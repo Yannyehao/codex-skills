@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$Destination,
-    [string[]]$SkillName = @('ste-fr', 'lexicon-ingest', 'market-review', 'trade-execution', 'trade-case-logger', 'us-market-review', 'print-model')
+    [string[]]$SkillName = @('ste-fr', 'lexicon-ingest', 'market-review', 'trade-execution', 'trade-case-logger', 'us-market-review', 'print-model', 'hua-fm-production')
 )
 
 $ErrorActionPreference = 'Stop'

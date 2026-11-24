@@ -4,6 +4,7 @@
 
 | Skill | 用途 | 调用 |
 |---|---|---|
+| [hua-fm-production](skills/hua-fm-production/SKILL.md) | 华罗庚 FM 的提示词复用、双帧拼接、样片验收和迭代记录 | `$hua-fm-production` 或“华罗庚 FM 续拍/重做/审片” |
 | [print-model](skills/print-model/SKILL.md) | 功能性3D打印件建模、预览、检查、试装和导出；可选项目Gallery | `$print-model` 或“帮我做/修改3D打印模型” |
 | [ste-fr](skills/ste-fr/SKILL.md) | 法语、英语、中文逐段对照的自然对话 | `$ste-fr` 或 `/ste-fr` |
 | [lexicon-ingest](skills/lexicon-ingest/SKILL.md) | 将明确批准的英法原文按词元与实际出现次数写入词库 | `$lexicon-ingest` 或“把刚才的词入库” |

@@ -1,5 +1,10 @@
 # DEVLOG
 
+## 2026-11-24｜华罗庚 FM 制作 Skill
+
+- 新增 `hua-fm-production`。生成前回看相同输入方式下的已认可原词，按本轮目标制作并分别核对段内表演与接缝。
+- 原词、实片和裁决保留于项目记录。用户修改长期流程后，在源仓库维护 Skill 并重新安装。
+
 ## 2026-11-12: Lexicon highlight-aware ingestion
 - Added current review fields, explicit-highlight evidence mapping, context deduplication and metadata-only retries.
 - Preserved full-text counts, existing mastery/recall/date history; aligned entry identity with Language + Type + normalized Entry.
