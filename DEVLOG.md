@@ -4,6 +4,7 @@
 
 - 新增 `hua-fm-production`。生成前回看相同输入方式下的已认可原词，按本轮目标制作并分别核对段内表演与接缝。
 - 原词、实片和裁决保留于项目记录。用户修改长期流程后，在源仓库维护 Skill 并重新安装。
+- 首次实拍发现旧有声片的动作词换锚图后可能让无声底片明显张嘴。补充迁移检查，对照新原片后再拼接。
 
 ## 2026-11-12: Lexicon highlight-aware ingestion
 - Added current review fields, explicit-highlight evidence mapping, context deduplication and metadata-only retries.
